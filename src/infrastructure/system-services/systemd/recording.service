@@ -1,0 +1,14 @@
+[Unit]
+Description=FootballVision Recording Service
+After=network.target nvargus-daemon.service
+PartOf=footballvision.target
+
+[Service]
+Type=simple
+ExecStart=/opt/footballvision/bin/recording_service
+Restart=always
+RestartSec=5
+User=vision
+
+[Install]
+WantedBy=footballvision.target
