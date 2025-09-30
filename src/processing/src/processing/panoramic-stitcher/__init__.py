@@ -1,0 +1,1 @@
+"""Panoramic Stitcher (W24)"""
