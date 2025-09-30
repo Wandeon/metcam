@@ -1,0 +1,63 @@
+{
+  "dashboard": {
+    "title": "FootballVision Pro - System Health",
+    "panels": [
+      {
+        "title": "Recording Status",
+        "type": "stat",
+        "targets": [{
+          "expr": "recording_status"
+        }]
+      },
+      {
+        "title": "System Temperature",
+        "type": "graph",
+        "targets": [{
+          "expr": "system_temperature_celsius"
+        }]
+      },
+      {
+        "title": "Frame Rate",
+        "type": "graph",
+        "targets": [{
+          "expr": "rate(frames_captured_total[1m])"
+        }]
+      },
+      {
+        "title": "Storage Available",
+        "type": "gauge",
+        "targets": [{
+          "expr": "storage_available_bytes / 1024 / 1024 / 1024"
+        }]
+      },
+      {
+        "title": "CPU Usage",
+        "type": "graph",
+        "targets": [{
+          "expr": "cpu_usage_percent"
+        }]
+      },
+      {
+        "title": "GPU Usage",
+        "type": "graph",
+        "targets": [{
+          "expr": "gpu_utilization_percent"
+        }]
+      },
+      {
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [{
+          "expr": "memory_usage_bytes / 1024 / 1024 / 1024"
+        }]
+      },
+      {
+        "title": "Network Status",
+        "type": "stat",
+        "targets": [{
+          "expr": "network_connected"
+        }]
+      }
+    ]
+  }
+}

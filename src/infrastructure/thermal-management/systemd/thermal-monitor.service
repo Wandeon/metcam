@@ -1,0 +1,12 @@
+[Unit]
+Description=Thermal Monitoring Daemon
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/footballvision/thermal-management/thermal_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
