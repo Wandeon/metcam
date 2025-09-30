@@ -1,0 +1,31 @@
+{
+  "components": {
+    "infrastructure": {
+      "status": "pending",
+      "workers": ["W1-W10"],
+      "dependencies": [],
+      "apis": []
+    },
+    "video-pipeline": {
+      "status": "pending", 
+      "workers": ["W11-W20"],
+      "dependencies": ["infrastructure"],
+      "apis": ["camera-control", "recording-api"]
+    },
+    "processing": {
+      "status": "pending",
+      "workers": ["W21-W30"],
+      "dependencies": ["video-pipeline"],
+      "apis": ["stitching-api", "calibration-api"]
+    },
+    "platform": {
+      "status": "pending",
+      "workers": ["W31-W40"],
+      "dependencies": ["video-pipeline", "processing"],
+      "apis": ["rest-api", "websocket-api"]
+    }
+  },
+  "integration_points": [],
+  "test_results": {},
+  "version": "0.0.1"
+}

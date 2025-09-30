@@ -1,0 +1,15 @@
+# Global owner
+* @queen
+
+# Team ownership
+/src/infrastructure/ @infrastructure-team @queen
+/src/video-pipeline/ @video-team @queen
+/src/processing/ @processing-team @queen
+/src/platform/ @platform-team @queen
+/tests/ @quality-team @queen
+/docs/ @queen
+
+# Critical files
+/README.md @queen
+/.github/ @queen
+/deploy/ @infrastructure-team @queen

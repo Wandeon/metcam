@@ -1,0 +1,41 @@
+# Build outputs
+build/
+dist/
+*.o
+*.so
+*.pyc
+__pycache__/
+
+# Development
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Credentials
+*.key
+*.pem
+.env
+secrets/
+
+# Test outputs
+coverage/
+*.log
+test-results/
+
+# Video files (too large)
+*.mp4
+*.h265
+*.raw
+recordings/
+
+# Model files
+*.onnx
+*.engine
+*.trt
+
+# Dependencies
+node_modules/
+venv/
+vendor/
