@@ -21,7 +21,7 @@ export interface RecordingRequest {
   match_id: string;
   resolution?: string;
   fps?: number;
-  bitrate?: number;
+  bitrate_kbps?: number;
 }
 
 export interface RecordingStartResponse {

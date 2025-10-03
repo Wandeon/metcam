@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiService, RecordingStatus } from '@/services/api';
-import { Video, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import { Video, AlertCircle, CheckCircle, Clock, X } from 'lucide-react';
 
 export const Dashboard: React.FC = () => {
   const [status, setStatus] = useState<RecordingStatus | null>(null);
@@ -9,6 +9,8 @@ export const Dashboard: React.FC = () => {
   const [matchId, setMatchId] = useState('');
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const fetchStatus = async () => {
     try {
@@ -25,13 +27,14 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 2000);
+    const interval = setInterval(fetchStatus, 1000); // Update every 1 second
     return () => clearInterval(interval);
   }, []);
 
   const handleStartRecording = async () => {
     if (!matchId.trim()) {
-      alert('Please enter a match ID');
+      setError('Please enter a match ID');
+      setTimeout(() => setError(null), 3000);
       return;
     }
 
@@ -39,14 +42,17 @@ export const Dashboard: React.FC = () => {
     try {
       await apiService.startRecording({
         match_id: matchId,
-        resolution: '3840x2160',
-        fps: 22,
-        bitrate: 100000,
+        resolution: '1920x1080',
+        fps: 30,
+        bitrate_kbps: 12000,
       });
       await fetchStatus();
       setMatchId('');
+      setSuccessMessage('Recording started successfully!');
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
-      alert('Failed to start recording');
+      setError('Failed to start recording');
+      setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
       setIsStarting(false);
@@ -54,13 +60,24 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleStopRecording = async () => {
+    if (!confirmStop) {
+      setConfirmStop(true);
+      setTimeout(() => setConfirmStop(false), 5000);
+      return;
+    }
+
     setIsStopping(true);
+    setConfirmStop(false);
     try {
       const result = await apiService.stopRecording();
       await fetchStatus();
-      alert(`Recording stopped. Duration: ${Math.round(result.duration_seconds)}s`);
+      const durationMins = Math.floor(result.duration_seconds / 60);
+      const durationSecs = Math.round(result.duration_seconds % 60);
+      setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+      setTimeout(() => setSuccessMessage(null), 8000);
     } catch (err) {
-      alert('Failed to stop recording');
+      setError('Failed to stop recording');
+      setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
       setIsStopping(false);
@@ -91,9 +108,26 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg flex items-center">
-          <AlertCircle className="w-5 h-5 mr-2" />
-          {error}
+        <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg flex items-center justify-between">
+          <div className="flex items-center">
+            <AlertCircle className="w-5 h-5 mr-2" />
+            {error}
+          </div>
+          <button onClick={() => setError(null)} className="text-red-600 hover:text-red-800">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-center justify-between">
+          <div className="flex items-center">
+            <CheckCircle className="w-5 h-5 mr-2" />
+            {successMessage}
+          </div>
+          <button onClick={() => setSuccessMessage(null)} className="text-green-700 hover:text-green-900">
+            <X className="w-5 h-5" />
+          </button>
         </div>
       )}
 
@@ -179,7 +213,7 @@ export const Dashboard: React.FC = () => {
                 value={matchId}
                 onChange={(e) => setMatchId(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                placeholder="e.g., match_20251002_001"
+                placeholder="e.g., match_20251003_001"
               />
             </div>
 
@@ -194,11 +228,13 @@ export const Dashboard: React.FC = () => {
             <div className="text-sm text-gray-600 bg-gray-50 p-4 rounded-lg">
               <p className="font-semibold mb-2">Recording Settings:</p>
               <ul className="space-y-1">
-                <li>• Resolution: 3840x2160 (4K) @ 22fps constant</li>
-                <li>• Encoder: H.264 (x264 software, ultrafast preset)</li>
-                <li>• Bitrate: ~50 Mbps per camera (~100 Mbps total)</li>
-                <li>• Sports mode: 1/250s min shutter, ISO ≤1600</li>
-                <li>• Storage: ~165 GB per 150min match (both cameras)</li>
+                <li>• Resolution: 1920x1080 @ 30fps (native sensor rate)</li>
+                <li>• Encoder: H.264 x264 software (ultrafast preset)</li>
+                <li>• Bitrate: 12 Mbps per camera (24 Mbps total)</li>
+                <li>• Segments: 5-minute MP4 files (crash-safe)</li>
+                <li>• HLS Preview: 10fps live stream during recording</li>
+                <li>• Storage: ~20 GB per 150min match (both cameras)</li>
+                <li>• Auto-upload: VPS-02 after 10 min delay</li>
               </ul>
             </div>
           </div>
@@ -206,15 +242,23 @@ export const Dashboard: React.FC = () => {
           <div className="space-y-4">
             <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
               <p className="font-semibold">Recording in progress</p>
-              <p className="text-sm mt-1">Click "Stop Recording" to finalize the video files</p>
+              <p className="text-sm mt-1">
+                {confirmStop 
+                  ? 'Click "Stop Recording" again to confirm' 
+                  : 'Click "Stop Recording" to finalize the video segments'}
+              </p>
             </div>
 
             <button
               onClick={handleStopRecording}
               disabled={isStopping}
-              className="w-full bg-red-500 hover:bg-red-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
+              className={`w-full font-semibold py-3 rounded-lg transition-colors ${
+                confirmStop
+                  ? 'bg-orange-500 hover:bg-orange-600 text-white animate-pulse'
+                  : 'bg-red-500 hover:bg-red-600 text-white'
+              } disabled:bg-gray-400`}
             >
-              {isStopping ? 'Stopping...' : 'Stop Recording'}
+              {isStopping ? 'Stopping...' : confirmStop ? 'Click Again to Confirm Stop' : 'Stop Recording'}
             </button>
           </div>
         )}
