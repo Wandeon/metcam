@@ -44,7 +44,7 @@ export const Dashboard: React.FC = () => {
         match_id: matchId,
         resolution: '1920x1080',
         fps: 30,
-        bitrate_kbps: 12000,
+        bitrate_kbps: 45000,
       });
       await fetchStatus();
       setMatchId('');
@@ -229,11 +229,11 @@ export const Dashboard: React.FC = () => {
               <p className="font-semibold mb-2">Recording Settings:</p>
               <ul className="space-y-1">
                 <li>• Resolution: 1920x1080 @ 30fps (native sensor rate)</li>
-                <li>• Encoder: H.264 x264 software (ultrafast preset)</li>
-                <li>• Bitrate: 12 Mbps per camera (24 Mbps total)</li>
+                <li>• Encoder: H.264 x264 software (ultrafast, VBR)</li>
+                <li>• Bitrate: 45 Mbps per camera (90 Mbps total, VBR)</li>
                 <li>• Segments: 5-minute MP4 files (crash-safe)</li>
                 <li>• HLS Preview: 10fps live stream during recording</li>
-                <li>• Storage: ~20 GB per 150min match (both cameras)</li>
+                <li>• Storage: ~100 GB per 150min match (both cameras)</li>
                 <li>• Auto-upload: VPS-02 after 10 min delay</li>
               </ul>
             </div>

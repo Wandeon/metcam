@@ -144,7 +144,7 @@ class RecordingManager:
     def start_recording(self, match_id: str,
                         resolution: str = "1920x1080",
                         fps: int = 30,
-                        bitrate_kbps: int = 12000,
+                        bitrate_kbps: int = 45000,
                         hls_preview: bool = True,
                         hls_fps: int = 10,
                         hls_bitrate_kbps: int = 2000) -> dict:
@@ -300,7 +300,7 @@ class RecordingManager:
 if __name__ == "__main__":
     manager = RecordingManager()
     print("Starting 10 second test recording...")
-    manager.start_recording("cli_test", resolution="1920x1080", fps=30, bitrate_kbps=12000)
+    manager.start_recording("cli_test", resolution="1920x1080", fps=30, bitrate_kbps=45000)
     time.sleep(10)
     print("Stopping recording...")
     result = manager.stop_recording()
