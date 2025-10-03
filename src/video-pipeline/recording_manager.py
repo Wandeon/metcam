@@ -112,7 +112,7 @@ class RecordingManager:
                     "threads=1",
                 "!", "h264parse", "config-interval=1",
                 "!", "mpegtsmux",
-                "!", "hlssink2",
+                "!", "hlssink",
                     f"location={hls_dir}/cam{sensor_id}_%05d.ts",
                     f"playlist-location={hls_dir}/cam{sensor_id}.m3u8",
                     "max-files=10",
