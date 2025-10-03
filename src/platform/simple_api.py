@@ -150,6 +150,15 @@ def get_status():
 @app.post("/api/v1/recording")
 def start_recording(request: RecordingRequest):
     try:
+        preview_status = preview_service.get_status()
+        if preview_status.get('streaming'):
+            logger.info("Preview active when recording requested; stopping preview beforehand")
+            try:
+                preview_service.stop()
+            except Exception as stop_err:
+                logger.error(f"Failed to stop preview before recording: {stop_err}")
+                raise RuntimeError("Unable to stop preview stream; recording aborted")
+
         result = recording_manager.start_recording(
             match_id=request.match_id,
             resolution=request.resolution,
@@ -259,19 +268,24 @@ def list_recordings():
                 if match_id not in recordings:
                     recordings[match_id] = []
 
-                # Calculate total size of segments
-                total_size = sum(f.stat().st_size for f in segment_files)
-                oldest_time = min(f.stat().st_mtime for f in segment_files)
+                # Group segments by camera
+                cam0_segments = [f for f in segment_files if 'cam0' in f.name]
+                cam1_segments = [f for f in segment_files if 'cam1' in f.name]
 
-                # Add entry for segmented recording
-                recordings[match_id].append({
-                    'file': f'{match_id}_segments',
-                    'filename': f'{match_id} (segments)',
-                    'size_mb': total_size / 1024 / 1024,
-                    'created_at': oldest_time,
-                    'segment_count': len(segment_files),
-                    'type': 'segmented'
-                })
+                # Add entries for each camera's segments
+                for cam_segments, cam_name in [(cam0_segments, 'cam0'), (cam1_segments, 'cam1')]:
+                    if cam_segments:
+                        total_size = sum(f.stat().st_size for f in cam_segments)
+                        oldest_time = min(f.stat().st_mtime for f in cam_segments)
+
+                        recordings[match_id].append({
+                            'file': f'{match_id}/segments/{cam_segments[0].name}',
+                            'filename': f'{match_id}_{cam_name}',
+                            'size_mb': total_size / 1024 / 1024,
+                            'created_at': oldest_time,
+                            'segment_count': len(cam_segments),
+                            'type': 'segmented'
+                        })
 
     return {"recordings": recordings}
 
