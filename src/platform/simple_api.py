@@ -222,11 +222,12 @@ def stop_recording():
 
 @app.get("/api/v1/recordings")
 def list_recordings():
+    """List all recordings including both merged files and segmented recordings"""
     recordings_dir = Path("/mnt/recordings")
-    files = list(recordings_dir.glob("*.mp4"))
-
     recordings = {}
-    for f in files:
+
+    # 1. Find merged MP4 files in root (old system and auto-merged files)
+    for f in recordings_dir.glob("*.mp4"):
         match_id = f.stem.rsplit('_cam', 1)[0]
         if '_sidebyside' in f.stem:
             match_id = f.stem.replace('_sidebyside', '')
@@ -238,8 +239,39 @@ def list_recordings():
         recordings[match_id].append({
             'file': f.name,
             'size_mb': stat.st_size / 1024 / 1024,
-            'created_at': stat.st_mtime  # Unix timestamp
+            'created_at': stat.st_mtime
         })
+
+    # 2. Find segmented recordings in subdirectories (new system)
+    for item in recordings_dir.iterdir():
+        if not item.is_dir():
+            continue
+
+        match_id = item.name
+        segments_dir = item / "segments"
+
+        # Check if this directory has segments
+        if segments_dir.exists():
+            segment_files = sorted(segments_dir.glob("*.mp4"))
+
+            if segment_files:
+                # Add this match if not already present
+                if match_id not in recordings:
+                    recordings[match_id] = []
+
+                # Calculate total size of segments
+                total_size = sum(f.stat().st_size for f in segment_files)
+                oldest_time = min(f.stat().st_mtime for f in segment_files)
+
+                # Add entry for segmented recording
+                recordings[match_id].append({
+                    'file': f'{match_id}_segments',
+                    'filename': f'{match_id} (segments)',
+                    'size_mb': total_size / 1024 / 1024,
+                    'created_at': oldest_time,
+                    'segment_count': len(segment_files),
+                    'type': 'segmented'
+                })
 
     return {"recordings": recordings}
 
