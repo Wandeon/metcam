@@ -135,9 +135,9 @@ async def shutdown_event():
 
 class RecordingRequest(BaseModel):
     match_id: str
-    resolution: str = "3840x2160"  # 4K UHD (sensor supports: 4032x3040@21fps, 3840x2160@30fps, 1920x1080@60fps)
-    fps: int = 22  # 22fps optimal for dual 4K recording
-    bitrate: int = 100000  # 100 Mbps - ~50 Mbps actual, ~162GB per 150min match
+    resolution: str = "1920x1080"  # 1080p (sensor supports: 4032x3040@21fps, 3840x2160@30fps, 1920x1080@60fps)
+    fps: int = 30  # 30fps native sensor rate
+    bitrate_kbps: int = 12000  # 12 Mbps per camera, ~20GB per 150min match
 
 @app.get("/")
 def root():
@@ -154,7 +154,7 @@ def start_recording(request: RecordingRequest):
             match_id=request.match_id,
             resolution=request.resolution,
             fps=request.fps,
-            bitrate=request.bitrate
+            bitrate_kbps=request.bitrate_kbps
         )
 
         # Log recording start
