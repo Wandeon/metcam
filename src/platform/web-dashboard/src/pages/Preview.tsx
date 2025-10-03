@@ -69,7 +69,7 @@ export const Preview: React.FC = () => {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Camera Preview</h1>
-        <p className="text-gray-600 mt-1">HD live preview (1280x720 @ 10fps)</p>
+        <p className="text-gray-600 mt-1">Full-frame live preview (1920x1080 @ 10fps)</p>
       </div>
 
       {error && (
@@ -115,9 +115,9 @@ export const Preview: React.FC = () => {
             <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
               <p className="font-semibold mb-1">Preview Settings:</p>
               <ul className="space-y-1">
-                <li>• Resolution: 1280x720 (HD)</li>
-                <li>• Frame rate: 10 fps</li>
-                <li>• Bitrate: 3 Mbps per camera</li>
+                <li>• Resolution: 1920x1080 (Full HD)</li>
+                <li>• Frame rate: 10 fps (throttled)</li>
+                <li>• Bitrate: 4 Mbps per camera</li>
                 <li>• Format: HLS stream (H.264)</li>
               </ul>
             </div>
@@ -155,7 +155,7 @@ export const Preview: React.FC = () => {
         <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm">
           <p className="font-semibold mb-1">⚠️ Important Notes:</p>
           <ul className="space-y-1">
-            <li>• Preview stream uses Full HD (1920x1080) at 30fps</li>
+            <li>• Preview stream uses Full HD (1920x1080) at 10fps</li>
             <li>• Stop preview before starting recording to free camera resources</li>
             <li>• Preview has ~2-4 second latency (normal for HLS)</li>
             <li>• Remove lens caps and ensure adequate lighting</li>

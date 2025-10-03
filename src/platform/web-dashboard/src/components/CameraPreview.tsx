@@ -30,12 +30,14 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: false,
-        backBufferLength: 90,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        maxBufferSize: 60 * 1000 * 1000,
-        maxBufferHole: 0.5,
+        lowLatencyMode: true,
+        backBufferLength: 10,
+        maxBufferLength: 10,
+        maxMaxBufferLength: 15,
+        maxBufferSize: 20 * 1000 * 1000,
+        maxBufferHole: 0.3,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 4,
       });
 
       hlsRef.current = hls;

@@ -267,6 +267,20 @@ def stop_preview():
     result = preview_service.stop()
     return result
 
+
+# Route aliases for UI compatibility (maps /api/preview/* to /api/v1/preview/*)
+@app.get("/api/preview/status")
+def get_preview_status_alias():
+    return get_preview_status()
+
+@app.post("/api/preview/start")
+def start_preview_alias():
+    return start_preview()
+
+@app.post("/api/preview/stop")
+def stop_preview_alias():
+    return stop_preview()
+
 # Import and register routers
 sys.path.insert(0, str(Path(__file__).parent / "api-server"))
 from routers import preview as preview_router

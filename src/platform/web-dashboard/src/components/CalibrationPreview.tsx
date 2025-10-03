@@ -2,10 +2,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ZoomIn, ZoomOut, Move, RotateCcw, Camera, Maximize, Play, Square } from 'lucide-react';
 
 interface CalibrationPreviewProps {
-  serverIp: string;
+  serverIp?: string;
 }
 
-export const CalibrationPreview: React.FC<CalibrationPreviewProps> = ({ serverIp }) => {
+export const CalibrationPreview: React.FC<CalibrationPreviewProps> = () => {
   const [camera, setCamera] = useState<0 | 1>(0);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -22,13 +22,13 @@ export const CalibrationPreview: React.FC<CalibrationPreviewProps> = ({ serverIp
   const imgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const snapshotUrl = `http://${serverIp}/api/v1/preview/calibration/cam${camera}/snapshot`;
+  const snapshotUrl = `/api/v1/preview/calibration/cam${camera}/snapshot`;
 
   // Check service status on mount
   useEffect(() => {
     const checkStatus = async () => {
       try {
-        const response = await fetch(`http://${serverIp}/api/v1/preview/calibration/status`);
+        const response = await fetch(`/api/v1/preview/calibration/status`);
         const data = await response.json();
         setServiceRunning(data.running || false);
       } catch (err) {
@@ -38,11 +38,11 @@ export const CalibrationPreview: React.FC<CalibrationPreviewProps> = ({ serverIp
       }
     };
     checkStatus();
-  }, [serverIp]);
+  }, []);
 
   const startCalibration = async () => {
     try {
-      const response = await fetch(`http://${serverIp}/api/v1/preview/calibration/start`, {
+      const response = await fetch(`/api/v1/preview/calibration/start`, {
         method: 'POST'
       });
       if (!response.ok) {
@@ -58,7 +58,7 @@ export const CalibrationPreview: React.FC<CalibrationPreviewProps> = ({ serverIp
 
   const stopCalibration = async () => {
     try {
-      const response = await fetch(`http://${serverIp}/api/v1/preview/calibration/stop`, {
+      const response = await fetch(`/api/v1/preview/calibration/stop`, {
         method: 'POST'
       });
       if (!response.ok) {
