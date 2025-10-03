@@ -1,0 +1,20 @@
+[Unit]
+Description=FootballVision Pro API Server
+After=network.target
+
+[Service]
+Type=simple
+User=mislav
+Group=mislav
+WorkingDirectory=/home/mislav/footballvision-pro/src/platform
+ExecStart=/usr/bin/python3 /home/mislav/footballvision-pro/src/platform/simple_api.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

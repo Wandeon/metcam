@@ -10,12 +10,22 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -fPIC")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -fPIC")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Project-wide include
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/pipeline-architecture/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/camera-control/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/gstreamer-core/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvenc-integration/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/recording-manager/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/stream-sync/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/preview-pipeline/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline-monitor/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/storage-writer/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/recovery-system/include
 )
 
 # Add all component subdirectories

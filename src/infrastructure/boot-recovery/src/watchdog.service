@@ -1,0 +1,13 @@
+[Unit]
+Description=FootballVision Watchdog Service
+After=network.target footballvision-api.service nginx.service
+
+[Service]
+Type=simple
+ExecStart=/home/mislav/footballvision-pro/src/infrastructure/boot-recovery/scripts/watchdog.sh
+Restart=always
+RestartSec=10
+User=mislav
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # FootballVision Pro Platform Installer
-# One-click installation script for NVIDIA Jetson Orin Nano
+# Complete web UI + API deployment for NVIDIA Jetson Orin Nano
 #
 
 set -e
@@ -11,157 +11,169 @@ echo "FootballVision Pro Platform Installer"
 echo "========================================="
 echo ""
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then
-  echo "Please run as root (use sudo)"
+# Check if NOT running as root
+if [ "$EUID" -eq 0 ]; then
+  echo "ERROR: Do not run this script as root. It will use sudo when needed."
   exit 1
 fi
 
-# Detect system
-echo "Detecting system..."
-if [ ! -f /etc/nv_tegra_release ]; then
-  echo "Warning: This doesn't appear to be a Jetson device"
-  read -p "Continue anyway? (y/n) " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    exit 1
-  fi
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(dirname "$(dirname "$PLATFORM_ROOT")")"
+
+echo "Platform root: $PLATFORM_ROOT"
+echo "Project root: $PROJECT_ROOT"
+echo ""
 
 # Install system dependencies
-echo ""
-echo "Installing system dependencies..."
-apt-get update
-apt-get install -y \
-  python3.11 \
-  python3-pip \
-  python3-venv \
-  nodejs \
-  npm \
-  sqlite3 \
-  nginx \
-  supervisor \
-  git
+echo "[1/7] Installing system dependencies..."
+sudo apt-get update
+sudo apt-get install -y nginx
 
-# Create application directory
+echo "✓ Nginx installed"
 echo ""
-echo "Creating application directories..."
-mkdir -p /opt/footballvision
-mkdir -p /var/lib/footballvision/recordings
-mkdir -p /var/log/footballvision
 
-# Set permissions
-chown -R $SUDO_USER:$SUDO_USER /opt/footballvision
-chown -R $SUDO_USER:$SUDO_USER /var/lib/footballvision
-chown -R $SUDO_USER:$SUDO_USER /var/log/footballvision
-
-# Copy application files
+# Python dependencies already installed from backend setup
+echo "[2/7] Verifying Python dependencies..."
+python3 -c "import fastapi, uvicorn" 2>/dev/null && echo "✓ Python dependencies verified" || {
+    echo "Installing Python dependencies..."
+    pip3 install --user fastapi uvicorn[standard] pydantic
+}
 echo ""
-echo "Installing application files..."
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cp -r "$SCRIPT_DIR/../api-server" /opt/footballvision/
-cp -r "$SCRIPT_DIR/../web-dashboard" /opt/footballvision/
-cp -r "$SCRIPT_DIR/../database" /opt/footballvision/
 
-# Setup Python virtual environment
-echo ""
-echo "Setting up Python environment..."
-cd /opt/footballvision/api-server
-python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+# Create recordings directory
+echo "[3/7] Setting up recordings directory..."
+RECORDINGS_DIR="/mnt/recordings"
+sudo mkdir -p "$RECORDINGS_DIR"
+sudo chown $USER:$USER "$RECORDINGS_DIR"
+chmod 755 "$RECORDINGS_DIR"
 
-# Initialize database
+echo "✓ Recordings directory: $RECORDINGS_DIR"
 echo ""
-echo "Initializing database..."
-python3 -c "
-from database.db_manager import init_database
-init_database('/var/lib/footballvision/data.db')
-print('Database initialized successfully')
-"
 
-# Build frontend
+# Verify API service
+echo "[4/7] Configuring API service..."
+if [ -f /etc/systemd/system/footballvision-api.service ]; then
+    echo "✓ API service already configured"
+else
+    sudo cp "$PROJECT_ROOT/deploy/footballvision-api.service" /etc/systemd/system/
+    sudo systemctl daemon-reload
+fi
+sudo systemctl enable footballvision-api
+sudo systemctl restart footballvision-api
+echo "✓ API service running"
 echo ""
-echo "Building web dashboard..."
-cd /opt/footballvision/web-dashboard
-npm install
-npm run build
+
+# Deploy web UI
+echo "[5/7] Deploying web UI..."
+WEB_ROOT="/var/www/footballvision"
+sudo mkdir -p "$WEB_ROOT"
+
+# Check if dist exists
+if [ ! -d "$PLATFORM_ROOT/web-dashboard/dist" ]; then
+    echo "Building web UI..."
+    cd "$PLATFORM_ROOT/web-dashboard"
+    npm run build
+fi
+
+sudo cp -r "$PLATFORM_ROOT/web-dashboard/dist/"* "$WEB_ROOT/"
+sudo chown -R www-data:www-data "$WEB_ROOT"
+
+echo "✓ Web UI deployed to $WEB_ROOT"
+echo ""
 
 # Configure Nginx
-echo ""
-echo "Configuring Nginx..."
-cat > /etc/nginx/sites-available/footballvision <<'EOF'
+echo "[6/7] Configuring Nginx..."
+
+sudo tee /etc/nginx/sites-available/footballvision > /dev/null <<'EOF'
 server {
-    listen 80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
     server_name _;
 
-    # Frontend
+    root /var/www/footballvision;
+    index index.html;
+
+    # Serve static files
     location / {
-        root /opt/footballvision/web-dashboard/dist;
         try_files $uri $uri/ /index.html;
     }
 
-    # API proxy
+    # Proxy API requests to backend
     location /api/ {
-        proxy_pass http://localhost:8080;
+        proxy_pass http://localhost:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Serve recording files for download
+    location /recordings/ {
+        alias /mnt/recordings/;
+        autoindex on;
+        add_header Content-Disposition 'attachment';
     }
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/footballvision /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t
-systemctl restart nginx
+# Enable site
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -sf /etc/nginx/sites-available/footballvision /etc/nginx/sites-enabled/
 
-# Configure Supervisor
+# Test and restart Nginx
+sudo nginx -t
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+
+echo "✓ Nginx configured and restarted"
 echo ""
-echo "Configuring service..."
-cat > /etc/supervisor/conf.d/footballvision-api.conf <<'EOF'
-[program:footballvision-api]
-command=/opt/footballvision/api-server/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8080
-directory=/opt/footballvision/api-server
-user=nobody
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/footballvision/api.err.log
-stdout_logfile=/var/log/footballvision/api.out.log
-EOF
 
-supervisorctl reread
-supervisorctl update
-supervisorctl start footballvision-api
-
-# Enable services on boot
-systemctl enable nginx
-systemctl enable supervisor
+# Set CPU governor
+echo "[7/7] Setting CPU to performance mode..."
+echo "performance" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
+echo "✓ CPU governor set to performance"
+echo ""
 
 # Get IP address
-IP_ADDR=$(hostname -I | awk '{print $1}')
+JETSON_IP=$(hostname -I | awk '{print $1}')
+
+# Final checks
+echo "Running final checks..."
+sleep 2
+
+API_STATUS=$(curl -s http://localhost:8000/api/v1/status 2>/dev/null | grep -q "status" && echo "OK" || echo "FAILED")
+WEB_STATUS=$(curl -s -I http://localhost/ 2>/dev/null | head -1 | grep -q "200" && echo "OK" || echo "FAILED")
 
 echo ""
 echo "========================================="
 echo "Installation Complete!"
 echo "========================================="
 echo ""
-echo "Access the dashboard at:"
-echo "  http://$IP_ADDR"
+echo "FootballVision Pro is now running!"
 echo ""
-echo "Default credentials:"
-echo "  Email: admin@localhost"
-echo "  Password: admin123"
+echo "Web Interface:"
+echo "  Local:    http://localhost"
+echo "  Network:  http://$JETSON_IP"
 echo ""
-echo "IMPORTANT: Change the default password immediately!"
+echo "Login Password: 'admin' or 'footballvision'"
 echo ""
-echo "Services:"
-echo "  API: http://$IP_ADDR/api/docs"
-echo "  Status: supervisorctl status footballvision-api"
-echo "  Logs: tail -f /var/log/footballvision/api.out.log"
+echo "System Status:"
+echo "  API Backend:  $API_STATUS"
+echo "  Web UI:       $WEB_STATUS"
+echo ""
+echo "Service Management:"
+echo "  API:    sudo systemctl status footballvision-api"
+echo "  Nginx:  sudo systemctl status nginx"
+echo "  Logs:   sudo journalctl -u footballvision-api -f"
+echo ""
+echo "Recording Files:"
+echo "  Location:   /mnt/recordings"
+echo "  Web Access: http://$JETSON_IP/recordings/"
 echo ""
 echo "========================================="
