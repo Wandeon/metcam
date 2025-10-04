@@ -31,14 +31,6 @@ class PreviewService:
         )
         return result.returncode == 0 and bool(result.stdout.strip())
 
-    def _resolve_base_url(self) -> str:
-        try:
-            ips = subprocess.check_output(["hostname", "-I"], text=True).strip().split()
-            host = ips[0] if ips else "localhost"
-        except Exception:
-            host = "localhost"
-        return f"http://{host}"
-
     def _cleanup_dir(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         for pattern in ("*.ts", "*.m3u8"):
@@ -117,8 +109,6 @@ class PreviewService:
         self._cleanup_dir(cam0_dir)
         self._cleanup_dir(cam1_dir)
 
-        base_url = self._resolve_base_url()
-
         self.cam0_process = self._launch_pipeline(0, cam0_dir)
         time.sleep(0.5)
         self.cam1_process = self._launch_pipeline(1, cam1_dir)
@@ -138,8 +128,8 @@ class PreviewService:
             "status": "streaming",
             "resolution": f"{self.width}x{self.height}",
             "framerate": self.framerate,
-            "cam0_url": f"{base_url}/hls/cam0/playlist.m3u8",
-            "cam1_url": f"{base_url}/hls/cam1/playlist.m3u8",
+            "cam0_url": "/hls/cam0/playlist.m3u8",
+            "cam1_url": "/hls/cam1/playlist.m3u8",
             "cam0_pid": self.cam0_process.pid if self.cam0_process else None,
             "cam1_pid": self.cam1_process.pid if self.cam1_process else None,
         }
@@ -155,7 +145,6 @@ class PreviewService:
         if not self.is_streaming:
             return {"status": "idle", "streaming": False}
 
-        base_url = self._resolve_base_url()
         cam0_running = self.cam0_process.poll() is None if self.cam0_process else False
         cam1_running = self.cam1_process.poll() is None if self.cam1_process else False
 
@@ -166,8 +155,8 @@ class PreviewService:
             "framerate": self.framerate,
             "cam0_running": cam0_running,
             "cam1_running": cam1_running,
-            "cam0_url": f"{base_url}/hls/cam0/playlist.m3u8",
-            "cam1_url": f"{base_url}/hls/cam1/playlist.m3u8",
+            "cam0_url": "/hls/cam0/playlist.m3u8",
+            "cam1_url": "/hls/cam1/playlist.m3u8",
         }
 
 

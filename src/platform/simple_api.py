@@ -136,8 +136,8 @@ async def shutdown_event():
 class RecordingRequest(BaseModel):
     match_id: str
     resolution: str = "1920x1080"  # 1080p (sensor supports: 4032x3040@21fps, 3840x2160@30fps, 1920x1080@60fps)
-    fps: int = 30  # 30fps native sensor rate
-    bitrate_kbps: int = 45000  # 45 Mbps per camera (VBR), ~100GB per 150min match
+    fps: int = 60  # Native 1080p sensor mode delivers 60 fps
+    bitrate_kbps: int = 12000  # 12 Mbps per camera (CBR target), ~32GB per 150min match
 
 @app.get("/")
 def root():
