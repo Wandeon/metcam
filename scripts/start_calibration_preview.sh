@@ -4,6 +4,24 @@ set -euo pipefail
 LOG_DIR="/var/log/footballvision"
 PIPE_PIDS=()
 
+# Calibration tunables (override via environment variables as needed)
+SENSOR_MODE=${SENSOR_MODE:-0}
+CAPTURE_FPS=${CAPTURE_FPS:-21}
+OUTPUT_FPS=${OUTPUT_FPS:-1}
+JPEG_QUALITY=${JPEG_QUALITY:-95}
+EXPOSURE_MIN_NS=${EXPOSURE_MIN_NS:-4000000}
+EXPOSURE_MAX_NS=${EXPOSURE_MAX_NS:-8333333}
+GAIN_MIN=${GAIN_MIN:-1}
+GAIN_MAX=${GAIN_MAX:-8}
+CROP_SIZE=${CROP_SIZE:-800}
+
+SENSOR_WIDTH=4032
+SENSOR_HEIGHT=3040
+LEFT=$(( (SENSOR_WIDTH - CROP_SIZE) / 2 ))
+RIGHT=$LEFT
+TOP=$(( (SENSOR_HEIGHT - CROP_SIZE) / 2 ))
+BOTTOM=$TOP
+
 mkdir -p "$LOG_DIR"
 
 cleanup() {
@@ -31,14 +49,22 @@ start_camera() {
     local log_file="$LOG_DIR/calibration_cam${sensor_id}.log"
 
     gst-launch-1.0 -e \
-        nvarguscamerasrc sensor-id=${sensor_id} sensor-mode=0 wbmode=1 aelock=false exposuretimerange="500 4000" gainrange="1 8" \
-        ! 'video/x-raw(memory:NVMM),width=4032,height=3040,framerate=21/1' \
-        ! videorate \
-        ! 'video/x-raw(memory:NVMM),framerate=1/1' \
+        nvarguscamerasrc \
+            sensor-id=${sensor_id} \
+            sensor-mode=${SENSOR_MODE} \
+            wbmode=1 \
+            aelock=false \
+            exposuretimerange="${EXPOSURE_MIN_NS} ${EXPOSURE_MAX_NS}" \
+            gainrange="${GAIN_MIN} ${GAIN_MAX}" \
+            tnr-mode=0 \
+        ! "video/x-raw(memory:NVMM),width=${SENSOR_WIDTH},height=${SENSOR_HEIGHT},framerate=${CAPTURE_FPS}/1" \
+        ! queue max-size-buffers=4 leaky=2 \
+        ! videorate drop-only=true \
+        ! "video/x-raw(memory:NVMM),framerate=${OUTPUT_FPS}/1" \
         ! nvvidconv \
-        ! 'video/x-raw,format=I420' \
-        ! videocrop left=1814 top=1368 right=1814 bottom=1368 \
-        ! jpegenc quality=90 \
+        ! "video/x-raw,format=I420" \
+        ! videocrop left=${LEFT} right=${RIGHT} top=${TOP} bottom=${BOTTOM} \
+        ! jpegenc quality=${JPEG_QUALITY} \
         ! multifilesink location=${target_file} max-files=1 \
         >>"$log_file" 2>&1 &
 
@@ -57,8 +83,8 @@ for pid in "${PIPE_PIDS[@]}"; do
     fi
 done
 
-echo "✓ Camera 0 snapshot: /dev/shm/cam0.jpg (full sensor @ 1fps)"
-echo "✓ Camera 1 snapshot: /dev/shm/cam1.jpg (full sensor @ 1fps)"
+echo "✓ Camera 0 snapshot: /dev/shm/cam0.jpg (center ${CROP_SIZE}x${CROP_SIZE} @ ${OUTPUT_FPS}fps)"
+echo "✓ Camera 1 snapshot: /dev/shm/cam1.jpg (center ${CROP_SIZE}x${CROP_SIZE} @ ${OUTPUT_FPS}fps)"
 echo "✓ API endpoints: /api/v1/preview/calibration/cam0/snapshot and cam1/snapshot"
 
 wait "${PIPE_PIDS[@]}"
