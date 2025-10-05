@@ -198,9 +198,28 @@ def stop_recording():
     result = recording_manager.stop_recording()
 
     # Log recording stop
-    duration = result.get('duration', 0)
-    files = result.get('files', [])
-    total_size = sum([os.path.getsize(f) for f in files if os.path.exists(f)])
+    duration = result.get('duration_seconds') or 0
+    segments_info = result.get('segments') or {}
+    segments_dir = segments_info.get('segments_dir')
+    total_size = 0
+
+    if segments_dir:
+        try:
+            segments_path = Path(segments_dir)
+            if segments_path.exists():
+                total_size = sum(f.stat().st_size for f in segments_path.glob("*.mp4"))
+            else:
+                logger.warning(f"Segments directory not found for match {match_id}: {segments_dir}")
+        except Exception as size_err:
+            logger.warning(f"Failed to calculate segment sizes for match {match_id}: {size_err}")
+
+    if not total_size:
+        try:
+            total_size_mb = segments_info.get('total_size_mb')
+            if total_size_mb:
+                total_size = int(total_size_mb * 1024 * 1024)
+        except Exception:
+            pass
 
     activity_logger.log_recording_stopped(
         match_id,
@@ -209,7 +228,12 @@ def stop_recording():
         frames_captured=0,
         frames_dropped=0
     )
-    logger.info(f"Recording stopped: {match_id}, duration: {duration}s, size: {total_size/(1024**3):.2f}GB")
+    logger.info(
+        "Recording stopped: %s, duration: %.2fs, size: %.2fGB",
+        match_id,
+        duration,
+        total_size / (1024 ** 3) if total_size else 0,
+    )
 
     # Update database
     try:
