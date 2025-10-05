@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 class PreviewService:
-    def __init__(self, hls_dir="/var/www/footballvision/hls"):
+    def __init__(self, hls_dir="/var/www/hls"):
         self.hls_dir = Path(hls_dir)
         self.cam0_process = None
         self.cam1_process = None
