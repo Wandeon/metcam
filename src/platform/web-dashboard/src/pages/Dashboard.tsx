@@ -43,8 +43,8 @@ export const Dashboard: React.FC = () => {
       await apiService.startRecording({
         match_id: matchId,
         resolution: '1920x1080',
-        fps: 60,
-        bitrate_kbps: 12000,
+        fps: 30,
+        bitrate_kbps: 45000,
       });
       await fetchStatus();
       setMatchId('');
@@ -228,12 +228,12 @@ export const Dashboard: React.FC = () => {
             <div className="text-sm text-gray-600 bg-gray-50 p-4 rounded-lg">
               <p className="font-semibold mb-2">Recording Settings:</p>
               <ul className="space-y-1">
-                <li>• Resolution: 1920x1080 @ 60fps (native sensor output)</li>
-                <li>• Encoder: H.264 x264 software (ultrafast profile, ~30 fps output)</li>
-                <li>• Bitrate: 12 Mbps per camera (constant target)</li>
+                <li>• Resolution: 1920x1080 @ 30fps (stable output)</li>
+                <li>• Encoder: H.264 x264 software (ultrafast, 4 threads)</li>
+                <li>• Bitrate: 45 Mbps per camera (high quality)</li>
                 <li>• Segments: 5-minute MP4 files (crash-safe)</li>
-                <li>• Live preview runs separately via Preview tab</li>
-                <li>• Storage: ~100 GB per 150min session (both cameras)</li>
+                <li>• Mode: Recording only (no preview during recording)</li>
+                <li>• Storage: ~337 MB/min = 50 GB per 150min session</li>
                 <li>• Auto-upload: VPS-02 after 10 min delay</li>
               </ul>
             </div>

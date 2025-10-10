@@ -324,7 +324,7 @@ def get_preview_status():
 
 @app.post("/api/v1/preview/start")
 def start_preview():
-    """Start HLS preview stream (4032x3040 @ 5fps)"""
+    """Start HLS preview stream (1920x1080 @ 30fps native sensor mode)"""
     try:
         result = preview_service.start()
         return result

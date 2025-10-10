@@ -7,10 +7,9 @@ import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Dashboard } from '@/pages/Dashboard';
 import { Matches } from '@/pages/Matches';
 import { Preview } from '@/pages/Preview';
-import { Calibration } from '@/pages/Calibration';
 import { ActivityLog } from '@/pages/ActivityLog';
 import { Login } from '@/pages/Login';
-import { Video, Home, Film, Eye, Focus, Settings, LogOut, Menu, X, Activity } from 'lucide-react';
+import { Video, Home, Film, Eye, Settings, LogOut, Menu, X, Activity } from 'lucide-react';
 
 function App() {
   const isAuthenticated = !!localStorage.getItem('access_token');
@@ -81,12 +80,6 @@ function App() {
                 onClick={() => setSidebarOpen(false)}
               />
               <NavLink
-                to="/calibration"
-                icon={<Focus />}
-                label="Calibration"
-                onClick={() => setSidebarOpen(false)}
-              />
-              <NavLink
                 to="/matches"
                 icon={<Film />}
                 label="Matches"
@@ -126,7 +119,6 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/preview" element={<Preview />} />
-            <Route path="/calibration" element={<Calibration />} />
             <Route path="/matches" element={<Matches />} />
             <Route path="/activity" element={<ActivityLog />} />
             <Route path="/settings" element={<div className="p-6">Settings (Coming Soon)</div>} />

@@ -6,8 +6,9 @@ Professional football match recording system for budget-conscious clubs.
 Dual-camera panoramic recording system built on NVIDIA Jetson Orin Nano Super, providing high-quality match recordings with automated post-game stitching.
 
 ## Features
-- Dual IMX477 12MP cameras
-- 4K @ 30fps recording per camera
+- Dual IMX477 12MP cameras (1920x1080 native mode)
+- Full HD 1080p @ 30fps recording per camera (45 Mbps H.264)
+- Separated preview (6 Mbps) and recording pipelines
 - Automated panoramic stitching
 - One-time purchase, no subscriptions
 - Cloud upload integration

@@ -1,268 +1,181 @@
 #!/usr/bin/env python3
-from datetime import datetime
-from pathlib import Path
+"""FootballVision Pro - Recording Manager
+
+Authoritative controller that wraps the on-device dual-camera recording script.
+"""
+
+from __future__ import annotations
+
+import json
+import os
 import signal
 import subprocess
 import time
-import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, Optional
+
 
 class RecordingManager:
-    """
-    Launches two gst-launch processes with splitmuxsink for segmented recording.
-    """
-    def __init__(self, output_root: str = "/mnt/recordings"):
+    """Control the dual-camera recording workflow via the production shell script."""
+
+    def __init__(
+        self,
+        output_root: str = "/mnt/recordings",
+        script_path: Optional[Path] = None,
+    ) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        self.script_path = Path(script_path) if script_path else repo_root / "scripts" / "record_dual_1080p30.sh"
         self.output_root = Path(output_root)
+
         self.output_root.mkdir(parents=True, exist_ok=True)
-        self.cam0_process = None
-        self.cam1_process = None
-        self.match_id = None
-        self.start_time = None
-        self.match_dir = None
-        self.vi_errors_baseline = {}
-        self.capture_fps_native = 60  # IMX477 native streaming rate at 1080p
-        self.output_fps = 30         # Encode at 30 fps for bandwidth/CPU headroom
-        self.encoder_threads = 3
-        self.gop_size = 60           # 2-second GOP at 30 fps
 
-    def _read_vi_errors(self) -> dict:
-        """Read VI error counters from traceFS"""
-        errors = {}
-        try:
-            result = subprocess.run(
-                ["cat", "/sys/kernel/debug/traceFS/vi/vi_errors"],
-                capture_output=True, text=True, timeout=2
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    match = re.match(r"(\w+):\s+(\d+)", line)
-                    if match:
-                        errors[match.group(1)] = int(match.group(2))
-        except Exception:
-            pass
-        return errors
+        self.process: Optional[subprocess.Popen] = None
+        self.match_id: Optional[str] = None
+        self.start_time: Optional[datetime] = None
+        self.pid_file = Path("/tmp/recording.pid")
+        self.match_id_file = Path("/tmp/recording_match_id.txt")
+        self.manifest_filename = "upload_manifest.json"
+        self.upload_delay_minutes = 10
 
-    def _check_vi_errors(self) -> bool:
-        """Check if VI errors increased since baseline. Returns True if OK, False if errors detected."""
-        if not self.vi_errors_baseline:
-            return True
-        
-        current = self._read_vi_errors()
-        for key in ["PIXEL_LONG_LINE", "FALCON_ERROR", "ChanselFault"]:
-            baseline_val = self.vi_errors_baseline.get(key, 0)
-            current_val = current.get(key, 0)
-            if current_val > baseline_val:
-                return False
-        return True
+        if not self.script_path.exists():
+            raise FileNotFoundError(f"Recording script not found: {self.script_path}")
 
-    def _preview_active(self) -> bool:
-        """Check if an external preview pipeline is using the sensors"""
-        result = subprocess.run(
-            "ps aux | grep 'nvarguscamerasrc.*hlssink' | grep -v grep",
-            shell=True,
-            capture_output=True,
-        )
-        return result.returncode == 0 and bool(result.stdout.strip())
+    # ------------------------------------------------------------------
+    # Lifecycle helpers
+    # ------------------------------------------------------------------
 
-    def _calibration_active(self) -> bool:
-        """Check if calibration snapshot pipelines are still running"""
-        result = subprocess.run(
-            "ps aux | grep 'multifilesink.*cam[01]\.jpg' | grep -v grep",
-            shell=True,
-            capture_output=True,
-        )
-        return result.returncode == 0 and bool(result.stdout.strip())
-
-    def _build_pipeline(
-            self,
-            sensor_id: int,
-            sensor_mode: int,
-            width: str,
-            height: str,
-            sensor_fps: int,
-            bitrate_kbps: int,
-            segments_dir: Path,
-            exposure_range: str,
-            gain_range: str
-        ) -> list:
-        """Build native 60 fps capture with 30 fps CPU encode"""
-        return [
-            'gst-launch-1.0', '-e',
-            'nvarguscamerasrc',
-            f'sensor-id={sensor_id}',
-            f'sensor-mode={sensor_mode}',
-            'wbmode=1',
-            'aelock=false',
-            f'exposuretimerange={exposure_range}',
-            f'gainrange={gain_range}',
-            'ispdigitalgainrange=1 1',
-            'saturation=1.0',
-            '!', f'video/x-raw(memory:NVMM),width={width},height={height},framerate={sensor_fps}/1',
-            '!', 'nvvidconv',
-            '!', 'video/x-raw,format=I420',
-            '!', 'videorate',
-            '!', f'video/x-raw,framerate={self.output_fps}/1',
-            '!', 'x264enc',
-            f'bitrate={bitrate_kbps}',
-            'speed-preset=ultrafast',
-            'tune=zerolatency',
-            f'key-int-max={self.gop_size}',
-            f'threads={self.encoder_threads}',
-            '!', 'h264parse', 'config-interval=-1',
-            '!', 'splitmuxsink',
-            f'location={segments_dir}/cam{sensor_id}_%05d.mp4',
-            'muxer=mp4mux',
-            f'max-size-time={5*60*1000000000}',
-            'max-files=0',
-            'async-finalize=true',
-        ]
-
-    def start_recording(self, match_id: str,
-                        resolution: str = "1920x1080",
-                        fps: int = 60,
-                        bitrate_kbps: int = 12000,
-                        **_: int) -> dict:
-        if self.cam0_process or self.cam1_process:
+    def start_recording(self, match_id: Optional[str] = None, **_: int) -> Dict[str, object]:
+        """Start recording using the authoritative shell script."""
+        if self.is_recording():
             raise RuntimeError("Recording already in progress")
 
-        if self._preview_active():
-            raise RuntimeError("Preview stream is active. Stop preview before starting the recording.")
+        if not match_id:
+            match_id = f"match_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        if self._calibration_active():
-            subprocess.run(["sudo", "systemctl", "stop", "calibration-preview"], check=False)
-            time.sleep(2)
-            if self._calibration_active():
-                raise RuntimeError("Calibration preview is active. Stop calibration before starting the recording.")
-
-        try:
-            subprocess.run(["sudo", "nvpmodel", "-m", "1"], check=True, capture_output=True)
-            subprocess.run(["sudo", "jetson_clocks"], check=True, capture_output=True)
-        except Exception:
-            pass
-
-        self.vi_errors_baseline = self._read_vi_errors()
         self.match_id = match_id
-        self.start_time = datetime.now()
+        self.start_time = datetime.utcnow()
+        self.process = subprocess.Popen([str(self.script_path), match_id])
 
-        self.match_dir = self.output_root / match_id
-        self.match_dir.mkdir(parents=True, exist_ok=True)
+        # Persist PID and match ID for external tooling parity with the field device
+        self.pid_file.write_text(str(self.process.pid))
+        self.match_id_file.write_text(match_id)
 
-        segments_dir = self.match_dir / "segments"
-        segments_dir.mkdir(parents=True, exist_ok=True)
-
-        width, height = resolution.split("x")
-        sensor_mode = 1 if int(width) <= 1920 else 0
-        sensor_fps = self.capture_fps_native if sensor_mode == 1 else 30
-
-        exposure_range = "13000 33333333"
-        gain_range = "1 10"
-
-        cam0_cmd = self._build_pipeline(
-            0, sensor_mode, width, height, sensor_fps, bitrate_kbps, segments_dir, exposure_range, gain_range
-        )
-        cam1_cmd = self._build_pipeline(
-            1, sensor_mode, width, height, sensor_fps, bitrate_kbps, segments_dir, exposure_range, gain_range
-        )
-
-        self.cam0_process = subprocess.Popen(cam0_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        time.sleep(0.5)
-        self.cam1_process = subprocess.Popen(cam1_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        time.sleep(5.0)
-
-        for idx, proc in enumerate((self.cam0_process, self.cam1_process)):
-            if proc.poll() is not None:
-                stderr = proc.stderr.read().decode(errors="ignore") if proc.stderr else ""
-                self.stop_recording()
-                camera = f"camera {idx}"
-                detail = stderr.strip() or "GStreamer pipeline failed"
-                raise RuntimeError(f"Failed to start recording for {camera}: {detail}")
-
-        if not self._check_vi_errors():
-            self.stop_recording()
-            raise RuntimeError("VI errors detected (PIXEL_LONG_LINE/FALCON_ERROR/ChanselFault) - check sensor connections")
+        # Give the script a moment to boot pipelines so we can report status
+        time.sleep(3)
+        if self.process.poll() is not None:
+            raise RuntimeError("Recording script exited before pipelines initialised")
 
         return {
             "status": "recording",
+            "recording": True,
             "match_id": match_id,
-            "cam0_pid": self.cam0_process.pid,
-            "cam1_pid": self.cam1_process.pid,
-            "start_time": self.start_time.isoformat(),
-            "segments_dir": str(segments_dir),
+            "pid": self.process.pid,
         }
 
-    def stop_recording(self) -> dict:
-        if not self.cam0_process and not self.cam1_process:
-            return {"status": "not_recording"}
+    def stop_recording(self) -> Dict[str, object]:
+        if not self.pid_file.exists():
+            return {"status": "idle", "recording": False}
 
-        duration = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
+        pid = int(self.pid_file.read_text().strip())
+        match_id = self.match_id or (self.match_id_file.read_text().strip() if self.match_id_file.exists() else None)
 
-        # Send SIGINT to gracefully finalize segments
-        for proc in (self.cam0_process, self.cam1_process):
-            if proc:
-                try:
-                    proc.send_signal(signal.SIGINT)
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                except Exception:
-                    proc.kill()
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
-        time.sleep(2)  # Allow filesystems to sync
+        time.sleep(10)
 
-        segments_dir = self.match_dir / "segments" if self.match_dir else None
-        cam0_segments = sorted(segments_dir.glob("cam0_*.mp4")) if segments_dir and segments_dir.exists() else []
-        cam1_segments = sorted(segments_dir.glob("cam1_*.mp4")) if segments_dir and segments_dir.exists() else []
+        self.pid_file.unlink(missing_ok=True)
+        self.match_id_file.unlink(missing_ok=True)
 
-        total_size_mb = sum(s.stat().st_size for s in cam0_segments + cam1_segments) / 1024 / 1024
+        stop_time = datetime.utcnow()
+        upload_ready_time = stop_time + timedelta(minutes=self.upload_delay_minutes)
 
-        result = {
+        segments_dir = self.output_root / (match_id or "unknown") / "segments"
+        cam0_segments = sorted(segments_dir.glob("cam0_*.mp4")) if segments_dir.exists() else []
+        cam1_segments = sorted(segments_dir.glob("cam1_*.mp4")) if segments_dir.exists() else []
+        total_size_mb = sum(s.stat().st_size for s in cam0_segments + cam1_segments) / 1024 / 1024 if cam0_segments or cam1_segments else 0.0
+
+        if match_id:
+            self._write_upload_manifest(match_id, segments_dir, stop_time, upload_ready_time)
+
+        duration = (stop_time - self.start_time).total_seconds() if self.start_time else 0.0
+
+        self.process = None
+        self.match_id = None
+        self.start_time = None
+
+        return {
             "status": "stopped",
-            "match_id": self.match_id,
+            "recording": False,
+            "match_id": match_id,
             "duration_seconds": duration,
+            "upload_ready_at": upload_ready_time.isoformat() + "Z",
             "segments": {
                 "cam0_count": len(cam0_segments),
                 "cam1_count": len(cam1_segments),
                 "total_size_mb": total_size_mb,
-                "segments_dir": str(segments_dir) if segments_dir else None,
+                "segments_dir": str(segments_dir),
             },
         }
 
-        self.cam0_process = None
-        self.cam1_process = None
-        self.match_id = None
-        self.start_time = None
-        self.match_dir = None
-        self.vi_errors_baseline = {}
+    def get_status(self) -> Dict[str, object]:
+        if self.is_recording():
+            match_id = self.match_id
+            if not match_id and self.match_id_file.exists():
+                match_id = self.match_id_file.read_text().strip()
+            return {
+                "status": "recording",
+                "recording": True,
+                "match_id": match_id,
+                "started_at": self.start_time.isoformat() + "Z" if self.start_time else None,
+            }
+        return {"status": "idle", "recording": False}
 
-        return result
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-    def get_status(self) -> dict:
-        if not self.cam0_process and not self.cam1_process:
-            return {"status": "idle"}
+    def is_recording(self) -> bool:
+        if self.pid_file.exists():
+            try:
+                pid = int(self.pid_file.read_text().strip())
+                os.kill(pid, 0)
+                return True
+            except (OSError, ValueError):
+                self.pid_file.unlink(missing_ok=True)
+                self.match_id_file.unlink(missing_ok=True)
+        return False
 
-        duration = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
-        
-        segments_dir = self.match_dir / "segments" if self.match_dir else None
-        cam0_segments = sorted(segments_dir.glob("cam0_*.mp4")) if segments_dir and segments_dir.exists() else []
-        cam1_segments = sorted(segments_dir.glob("cam1_*.mp4")) if segments_dir and segments_dir.exists() else []
+    def _write_upload_manifest(
+        self,
+        match_id: str,
+        segments_dir: Path,
+        stop_time: datetime,
+        upload_ready_time: datetime,
+    ) -> None:
+        match_dir = self.output_root / match_id
+        match_dir.mkdir(parents=True, exist_ok=True)
 
-        vi_ok = self._check_vi_errors()
-
-        return {
-            "status": "recording",
-            "match_id": self.match_id,
-            "duration_seconds": duration,
-            "cam0_running": self.cam0_process.poll() is None if self.cam0_process else False,
-            "cam1_running": self.cam1_process.poll() is None if self.cam1_process else False,
-            "cam0_segments": len(cam0_segments),
-            "cam1_segments": len(cam1_segments),
-            "vi_errors_ok": vi_ok,
+        manifest_path = match_dir / self.manifest_filename
+        tmp_path = manifest_path.with_suffix('.tmp')
+        manifest = {
+            "match_id": match_id,
+            "stopped_at": stop_time.isoformat() + "Z",
+            "upload_ready_at": upload_ready_time.isoformat() + "Z",
+            "upload_delay_minutes": self.upload_delay_minutes,
+            "segments_dir": str(segments_dir),
         }
 
+        tmp_path.write_text(json.dumps(manifest, indent=2))
+        os.replace(tmp_path, manifest_path)
+
+
 if __name__ == "__main__":
-    manager = RecordingManager()
-    print("Starting 10 second test recording...")
-    manager.start_recording("cli_test", resolution="1920x1080", fps=60, bitrate_kbps=12000)
-    time.sleep(10)
-    print("Stopping recording...")
-    result = manager.stop_recording()
-    print(f"Recording saved: {result}")
+    controller = RecordingManager()
+    status = controller.start_recording()
+    print(json.dumps(status, indent=2))
+    time.sleep(5)
+    print(json.dumps(controller.stop_recording(), indent=2))

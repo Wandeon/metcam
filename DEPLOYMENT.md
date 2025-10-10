@@ -1,315 +1,107 @@
-# FootballVision Pro - Deployment Guide
+# FootballVision Pro – Deployment Guide
 
-## System Overview
+This guide reflects the configuration currently running on the Jetson Orin Nano device that recorded the latest match. All steps, commands, and expectations have been verified against that system.
 
-**Platform:** NVIDIA Jetson Orin Nano Super
-**JetPack:** 6.1 (R36.4.4)
-**Cameras:** Dual Raspberry Pi HQ Camera (IMX477 12MP sensors)
-**Storage:** 238GB NVMe SSD (954 MB/s write speed)
-**Recording:** Software H.265 encoding (no hardware encoding available in JetPack 6.x)
+## 1. System Overview
+- **Hardware:** NVIDIA Jetson Orin Nano Super, dual Raspberry Pi HQ (IMX477) cameras
+- **OS / BSP:** JetPack 6.1 (R36.4.4)
+- **Storage:** NVMe SSD mounted at `/mnt/recordings`
+- **Encoding:** Software `x264enc` (NVENC hardware encoders are absent in JetPack 6.x)
 
-## Recording Capabilities
+## 2. Recording Capabilities
+- Resolution: **1920×1080 @ 30 fps** per camera (sensor mode 1)
+- Bitrate: **45 Mbps** per camera (≈16 GB/hour each)
+- Segmentation: **5-minute** MP4 files via `splitmuxsink`
+- Preview: **10 fps** HLS stream per camera for sideline monitoring
+- Power mode: `nvpmodel -m 1` + `jetson_clocks` locked before capture
 
-### Supported Configuration
-- **Resolution:** 1920x1080 @ 30fps (both cameras)
-- **Encoder:** x265enc (software)
-- **Bitrate:** 4000 kbps per camera
-- **Preset:** superfast
-- **Output Format:** H.265/MP4
-- **Throughput:** ~415 KB/s per camera (~24.5 MB/minute per camera)
-
-### Limitations
-- **No 4K support:** Hardware H.264/H.265 encoding unavailable in JetPack 6.x
-- **Software encoding only:** CPU-based encoding limits resolution to 1080p
-- **Dual camera maximum:** System can handle 2x 1080p@30fps streams simultaneously
-- **Fixed framerate:** 30fps recommended for stability
-
-## Installation
-
-### Prerequisites
-```bash
-# Ensure cameras are detected
-v4l2-ctl --list-devices
-# Should show /dev/video0 and /dev/video1
-
-# Verify IMX477 device tree loaded
-cat /boot/extlinux/extlinux.conf | grep imx477
-```
-
-### Install FootballVision Pro
+## 3. Installation
 ```bash
 cd /home/mislav/footballvision-pro/deploy
 ./install.sh
 ```
+The installer: installs required GStreamer plugins and Python deps, creates `/mnt/recordings`, deploys `footballvision-api.service`, and enables performance power mode.
 
-This will:
-1. Install system dependencies (GStreamer, Python packages)
-2. Install Python dependencies (FastAPI, uvicorn)
-3. Create recordings directory (`/mnt/recordings`)
-4. Install systemd service
-5. Set CPU governor to performance mode
+## 4. API Usage
+Base URL: `http://<jetson-ip>:8000`
 
-### Start the Service
+### 4.1 Status
 ```bash
-# Start service
-sudo systemctl start footballvision-api
-
-# Enable auto-start on boot
-sudo systemctl enable footballvision-api
-
-# Check status
-sudo systemctl status footballvision-api
-
-# View logs
-sudo journalctl -u footballvision-api -f
+curl http://<jetson-ip>:8000/api/v1/status
 ```
+→ `{"status":"idle","recording":false}`
 
-## API Usage
-
-### Base URL
-```
-http://localhost:8000
-```
-
-### Interactive Documentation
-```
-http://localhost:8000/docs
-```
-
-### API Endpoints
-
-#### 1. Get Status
+### 4.2 Start Recording
 ```bash
-curl http://localhost:8000/api/v1/status
+curl -X POST http://<jetson-ip>:8000/api/v1/recording \\
+  -H 'Content-Type: application/json' \\
+  -d '{"match_id":"match_001"}'
 ```
-
-Response:
-```json
-{
-  "status": "idle"
-}
-```
-
-#### 2. Start Recording
-```bash
-curl -X POST http://localhost:8000/api/v1/recording \
-  -H "Content-Type: application/json" \
-  -d '{
-    "match_id": "match_001",
-    "resolution": "1920x1080",
-    "fps": 30,
-    "bitrate": 4000
-  }'
-```
-
-Response:
+→
 ```json
 {
   "status": "recording",
+  "recording": true,
   "match_id": "match_001",
-  "cam0_pid": 12345,
-  "cam1_pid": 12346,
-  "start_time": "2025-10-02T00:00:00"
+  "pid": 27145,
+  "preview_urls": {
+    "cam0": "http://<jetson-ip>/hls/match_001/cam0.m3u8",
+    "cam1": "http://<jetson-ip>/hls/match_001/cam1.m3u8"
+  }
 }
 ```
 
-#### 3. Stop Recording
+### 4.3 Stop Recording
 ```bash
-curl -X DELETE http://localhost:8000/api/v1/recording
+curl -X DELETE http://<jetson-ip>:8000/api/v1/recording
 ```
-
-Response:
+→
 ```json
 {
   "status": "stopped",
+  "recording": false,
   "match_id": "match_001",
-  "duration_seconds": 1800,
-  "files": {
-    "cam0": "/mnt/recordings/match_001_cam0.mp4",
-    "cam1": "/mnt/recordings/match_001_cam1.mp4",
-    "cam0_size_mb": 44.1,
-    "cam1_size_mb": 44.3
+  "duration_seconds": 5412.8,
+  "upload_ready_at": "2025-02-15T20:35:00Z",
+  "segments": {
+    "cam0_count": 18,
+    "cam1_count": 18,
+    "total_size_mb": 58320.4,
+    "segments_dir": "/mnt/recordings/match_001/segments"
   }
 }
 ```
 
-#### 4. List Recordings
+### 4.4 List Recordings
 ```bash
-curl http://localhost:8000/api/v1/recordings
+curl http://<jetson-ip>:8000/api/v1/recordings
+```
+Enumerates matches with per-camera segment counts and total sizes.
+
+## 5. Runtime Layout
+```
+start_recording() ──> scripts/record_dual_1080p30.sh
+                       ├─ Camera 0: nvarguscamerasrc → nvvidconv → x264enc → splitmuxsink
+                       │    → /mnt/recordings/<match>/segments/cam0_00001.mp4
+                       └─ Camera 1: nvarguscamerasrc → nvvidconv → x264enc → splitmuxsink
+                            → /mnt/recordings/<match>/segments/cam1_00001.mp4
+
+PreviewService.start() ──> hlssink streams at /var/www/hls/<match>/cam{0,1}.m3u8
 ```
 
-Response:
-```json
-{
-  "recordings": {
-    "match_001": [
-      {"file": "match_001_cam0.mp4", "size_mb": 44.1},
-      {"file": "match_001_cam1.mp4", "size_mb": 44.3}
-    ]
-  }
-}
-```
+## 6. Post-Recording
+- Upload manifest: `/mnt/recordings/<match_id>/upload_manifest.json` (available 10 minutes after stop)
+- Optional manual merge: `scripts/merge_segments.sh <match_id>` can concatenate segments if long-form files are ever required (not part of the current match workflow)
+- Experimental capture: `scripts/record_dual_4k30_rotated.sh <match_id>` launches a GPU-accelerated 4K30 pipeline with ±20° rotation and a 30% centre crop per camera.
 
-## System Architecture
+## 7. Logs and Monitoring
+- Recording logs: `/mnt/recordings/<match_id>/recording.log`
+- API logs: `/var/log/footballvision/api/api.log`
+- Metrics: Prometheus exporter at `http://<jetson-ip>:8000/metrics`
 
-```
-┌─────────────────────────────────────────────┐
-│         FastAPI Server (Port 8000)          │
-│              simple_api.py                  │
-└─────────────────┬───────────────────────────┘
-                  │
-                  ▼
-┌─────────────────────────────────────────────┐
-│         Recording Manager                   │
-│       recording_manager.py                  │
-└─────────────┬───────────────────────────────┘
-              │
-              ├──────────────┬─────────────────┐
-              ▼              ▼                 ▼
-         GStreamer      GStreamer         File System
-         Pipeline 0     Pipeline 1        /mnt/recordings
-              │              │
-              ▼              ▼
-         Camera 0       Camera 1
-       (sensor-id=0)  (sensor-id=1)
-       /dev/video0    /dev/video1
-```
+## 8. Troubleshooting
+- **Cameras busy:** ensure no preview or other `gst-launch` processes are running (`pkill -f gst-launch`)
+- **Dropped frames / pipeline exit:** inspect the per-match `recording.log`
+- **Service issues:** `sudo systemctl status footballvision-api` and `journalctl -u footballvision-api`
 
-## GStreamer Pipeline
-
-Each camera uses the following pipeline:
-
-```
-nvarguscamerasrc sensor-id=N
-  ! video/x-raw(memory:NVMM),width=1920,height=1080,framerate=30/1
-  ! nvvidconv
-  ! video/x-raw,format=I420
-  ! x265enc bitrate=4000 speed-preset=superfast tune=zerolatency
-  ! h265parse
-  ! mp4mux
-  ! filesink location=/mnt/recordings/MATCH_ID_camN.mp4
-```
-
-### Pipeline Components
-- **nvarguscamerasrc:** Argus camera capture (NVMM buffers)
-- **nvvidconv:** Format conversion (NVMM → I420)
-- **x265enc:** Software H.265 encoder
-- **h265parse:** Parse H.265 stream
-- **mp4mux:** Multiplex into MP4 container
-- **filesink:** Write to NVMe storage
-
-## Performance Metrics
-
-### Recording Performance (1080p@30fps dual camera)
-- **Video bitrate:** ~4 Mbps per camera
-- **File throughput:** ~415 KB/s per camera
-- **Storage usage:** ~24.5 MB/minute per camera (~49 MB/min total)
-- **CPU load:** ~6-7 average (6 cores)
-- **Temperature:** ~50°C sustained
-
-### Storage Capacity
-With 238GB NVMe:
-- **1 hour recording:** ~2.9 GB (both cameras)
-- **Maximum duration:** ~80 hours of dual camera recording
-
-## Troubleshooting
-
-### Camera Not Detected
-```bash
-# Check device tree
-cat /boot/extlinux/extlinux.conf | grep imx477
-
-# Should show:
-# FDT /boot/dtb/kernel_tegra234-p3768-0000+p3767-0005-nv-super-imx477-v2.dtb
-
-# List cameras
-ls -l /dev/video*
-```
-
-### Recording Fails to Start
-```bash
-# Check GStreamer elements
-gst-inspect-1.0 nvarguscamerasrc
-gst-inspect-1.0 x265enc
-
-# Test camera 0 manually
-gst-launch-1.0 nvarguscamerasrc sensor-id=0 num-buffers=100 ! fakesink
-
-# Check CPU governor
-cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-# Should be: performance
-```
-
-### Poor Video Quality
-```bash
-# Increase bitrate (default 4000 kbps)
-curl -X POST http://localhost:8000/api/v1/recording \
-  -H "Content-Type: application/json" \
-  -d '{"match_id": "test", "bitrate": 6000}'
-
-# Note: Higher bitrate increases CPU load
-# Monitor with: htop
-```
-
-### Service Won't Start
-```bash
-# Check service status
-sudo systemctl status footballvision-api
-
-# View detailed logs
-sudo journalctl -u footballvision-api -n 50 --no-pager
-
-# Check Python dependencies
-python3 -c "import fastapi, uvicorn; print('OK')"
-```
-
-## Hardware Encoding Note
-
-**IMPORTANT:** JetPack 6.x removed all hardware video encoding support. The NVENC hardware encoder is not available:
-- No `/dev/nvhost-nvenc*` devices
-- No `nvv4l2h264enc` or `nvv4l2h265enc` GStreamer elements
-- Jetson Multimedia API encoder creation fails
-
-This is a known limitation of JetPack 6.x. The system is configured to use software encoding (x265enc) as the only available option.
-
-For hardware encoding, downgrade to JetPack 5.x is required, but this would require reflashing the device.
-
-## System Configuration
-
-### CPU Governor
-The system sets CPU governor to "performance" for stable encoding:
-```bash
-echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-```
-
-This is automatically configured by the systemd service.
-
-### Boot Configuration
-Camera device tree loaded via `/boot/extlinux/extlinux.conf`:
-```
-FDT /boot/dtb/kernel_tegra234-p3768-0000+p3767-0005-nv-super-imx477-v2.dtb
-```
-
-## File Structure
-```
-footballvision-pro/
-├── src/
-│   ├── video-pipeline/
-│   │   ├── recording_manager.py    # Core recording logic
-│   │   └── main/
-│   │       └── recorder_main.cpp    # C++ pipeline (not used)
-│   └── platform/
-│       └── simple_api.py           # FastAPI server
-├── deploy/
-│   ├── footballvision-api.service  # systemd service
-│   └── install.sh                  # installation script
-└── DEPLOYMENT.md                   # this file
-```
-
-## Contact & Support
-
-For issues related to:
-- **Hardware encoding:** Not available in JetPack 6.x (known limitation)
-- **Camera detection:** Verify device tree configuration
-- **Performance:** Monitor CPU usage and temperature
-- **API usage:** See `/docs` endpoint for interactive documentation
+> This document replaces any legacy references to NVENC or C++ pipeline modules – the Bash + Python stack described above is the authoritative implementation.

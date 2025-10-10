@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { apiService } from '@/services/api';
 import { CameraPreview } from '@/components/CameraPreview';
 import { Play, Square, AlertCircle, Eye } from 'lucide-react';
+// v2.0 - 30fps @ 3Mbps smooth streaming (native 1080p60 sensor mode)
 
 export const Preview: React.FC = () => {
   const [previewStatus, setPreviewStatus] = useState<any>(null);
@@ -69,7 +70,7 @@ export const Preview: React.FC = () => {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Camera Preview</h1>
-        <p className="text-gray-600 mt-1">Full-frame live preview (1920x1080 @ 10fps)</p>
+        <p className="text-gray-600 mt-1">Full-frame live preview (1920x1080 @ 30fps - smooth streaming)</p>
       </div>
 
       {error && (
@@ -116,9 +117,11 @@ export const Preview: React.FC = () => {
               <p className="font-semibold mb-1">Preview Settings:</p>
               <ul className="space-y-1">
                 <li>• Resolution: 1920x1080 (Full HD)</li>
-                <li>• Frame rate: 10 fps (throttled)</li>
-                <li>• Bitrate: 4 Mbps per camera</li>
+                <li>• Frame rate: 30 fps (smooth streaming)</li>
+                <li>• Bitrate: 6 Mbps per camera (high quality)</li>
                 <li>• Format: HLS stream (H.264)</li>
+                <li>• Sensor mode: Native 1080p60 sensor</li>
+                <li>• Recording disabled during preview</li>
               </ul>
             </div>
           </div>
@@ -155,9 +158,9 @@ export const Preview: React.FC = () => {
         <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm">
           <p className="font-semibold mb-1">⚠️ Important Notes:</p>
           <ul className="space-y-1">
-            <li>• Preview stream uses Full HD (1920x1080) at 10fps</li>
-            <li>• Stop preview before starting recording to free camera resources</li>
-            <li>• Preview has ~2-4 second latency (normal for HLS)</li>
+            <li>• Preview stream: 1920x1080 @ 30fps, 6 Mbps per camera</li>
+            <li>• Preview will automatically stop when you start recording</li>
+            <li>• Low latency HLS with 2-second segments</li>
             <li>• Remove lens caps and ensure adequate lighting</li>
           </ul>
         </div>

@@ -1,177 +1,42 @@
 {
   "project": "FootballVision Pro",
-  "version": "0.1.0-alpha",
-  "last_updated": "2025-09-30",
-  "queen_review": "complete",
+  "last_synced_with_device": "2025-02-15",
   "components": {
     "infrastructure": {
-      "status": "complete",
-      "workers": ["W1-W10"],
-      "dependencies": [],
-      "apis": [],
-      "deliverables": {
-        "W1": "Device Tree (tegra234-p3768-camera-imx477-dual.dts)",
-        "W2": "JetPack 6.0 Custom Image (build-image.sh, image-config.yaml)",
-        "W3": "NVMe Storage Optimization (storage_manager.c, >450MB/s)",
-        "W4": "Network Optimization (upload_manager.py, 37.5MB/s)",
-        "W5": "Thermal Management (thermal_monitor.py, auto-throttle)",
-        "W6": "Memory Management (nvmm_allocator.c, zero-copy buffers)",
-        "W7": "Boot Recovery (watchdog.sh, <30s boot time)",
-        "W8": "HAL (camera_hal.c, gpio_control.c)",
-        "W9": "SystemD Services (footballvision.target, recording.service)",
-        "W10": "Dev Tools (cross-compile-setup.sh, diagnostics)"
-      },
-      "files_created": 22,
-      "loc": "~2500",
-      "tests": ["test_camera_detection.sh", "benchmark_capture_latency.sh", "benchmark_storage.sh"],
-      "integration_ready": true
+      "status": "in_use",
+      "notes": "Jetson Orin Nano Super running JetPack 6.1 with dual IMX477 sensors",
+      "artifacts": ["deploy/install.sh", "monitoring/", "cleanup_old_recordings.sh"],
+      "dependencies": []
     },
-    "video-pipeline": {
-      "status": "complete",
-      "workers": ["W11-W20"],
-      "dependencies": ["infrastructure"],
-      "apis": ["camera-control", "recording-api", "preview-stream"],
-      "deliverables": {
-        "W11": "Pipeline Architecture (interfaces.h, component design)",
-        "W12": "Camera Control (camera_control.cpp, libargus wrapper)",
-        "W13": "GStreamer Core (gstreamer_pipeline.cpp, nvmm_buffer_manager.cpp)",
-        "W14": "NVENC Integration (nvenc_encoder.cpp, H.265@100Mbps)",
-        "W15": "Recording Manager (recording_manager.cpp, state machine)",
-        "W16": "Stream Synchronization (stream_sync.cpp, ±1 frame accuracy)",
-        "W17": "Preview Pipeline (preview_pipeline.cpp, 720p@15fps MJPEG)",
-        "W18": "Pipeline Monitor (pipeline_monitor.cpp, alert system)",
-        "W19": "Storage Writer (storage_writer.cpp, optimized MP4 muxer)",
-        "W20": "Recovery System (recovery_system.cpp, <1s crash recovery)"
-      },
-      "files_created": 49,
-      "loc": "~5000",
-      "tests": ["test_camera_control.cpp", "test_pipeline.cpp"],
-      "build_system": "CMake",
-      "integration_ready": true
+    "video_pipeline": {
+      "status": "in_use",
+      "notes": "Dual nvarguscamerasrc → x264enc pipelines driven by record_dual_1080p30.sh (no automated side-by-side merging)",
+      "artifacts": [
+        "scripts/record_dual_1080p30.sh",
+        "scripts/merge_segments.sh",
+        "src/video-pipeline/recording_manager.py",
+        "src/video-pipeline/preview_service.py"
+      ],
+      "dependencies": ["infrastructure"]
+    },
+    "platform_api": {
+      "status": "in_use",
+      "notes": "FastAPI control plane exposing start/stop/status and preview endpoints",
+      "artifacts": [
+        "src/platform/simple_api.py",
+        "src/platform/api-server/",
+        "monitoring/prometheus"],
+      "dependencies": ["video_pipeline"]
     },
     "processing": {
-      "status": "complete",
-      "workers": ["W21-W30"],
-      "dependencies": ["video-pipeline"],
-      "apis": ["stitching-api", "calibration-api", "quality-metrics-api"],
-      "deliverables": {
-        "W21": "Pipeline Architecture (pipeline.py, PanoramicProcessor)",
-        "W22": "Camera Calibration (CalibrationManager, YAML persistence)",
-        "W23": "Barrel Correction (undistort_kernel.cu, 125 FPS target)",
-        "W24": "Panoramic Stitcher (homography-based, 7000×3040 output)",
-        "W25": "Color Matching (exposure/white balance/histogram)",
-        "W26": "GPU Memory Manager (pool allocation, utilization tracking)",
-        "W27": "Video Codec (NVDEC/NVENC, H.265 support)",
-        "W28": "Processing Optimizer (bottleneck detection, batch optimization)",
-        "W29": "Quality Assurance (SSIM, seam quality, temporal consistency)",
-        "W30": "Batch Processing Manager (job queue, state persistence)"
-      },
-      "files_created": 12,
-      "loc": "~3000",
-      "tests": ["test_integration.py"],
-      "benchmarks": ["benchmark_pipeline.py"],
-      "build_system": "CMake + Python",
-      "integration_ready": true
-    },
-    "platform": {
-      "status": "complete",
-      "workers": ["W31-W40"],
-      "dependencies": ["video-pipeline", "processing"],
-      "apis": ["rest-api", "websocket-api", "auth-api", "cloud-api"],
-      "deliverables": {
-        "W31": "API Architecture (OpenAPI 3.0 spec, 35+ endpoints)",
-        "W32": "Web Dashboard (React + TypeScript, Tailwind CSS)",
-        "W33": "Backend API Server (FastAPI, SQLite 15 tables)",
-        "W34": "Auth & Authorization (JWT, RBAC, bcrypt)",
-        "W35": "Cloud Upload Manager (S3-compatible, progress tracking)",
-        "W36": "Device Management (remote config, OTA updates)",
-        "W37": "Match Management (CRUD, metadata storage)",
-        "W38": "Notification System (Email/SMS/Discord/Slack)",
-        "W39": "Installer & Setup Wizard (one-click bash installer)",
-        "W40": "Mobile App (PWA-ready, mobile-responsive)"
-      },
-      "files_created": 12,
-      "loc": "~2500",
-      "tests": ["test_api.py", "test_auth.py"],
-      "integration_ready": true
+      "status": "pending",
+      "notes": "Panoramic stitching and post-game workflows not yet mirrored from device",
+      "artifacts": ["src/processing/"]
     },
     "quality": {
-      "status": "complete",
-      "workers": ["W41-W50"],
-      "dependencies": ["infrastructure", "video-pipeline", "processing", "platform"],
-      "apis": [],
-      "deliverables": {
-        "W41": "Test Strategy (MASTER_TEST_PLAN.md, 10 quality gates)",
-        "W42": "Integration Tests (test_recording_workflow.py, test_api_contracts.py)",
-        "W43": "Performance Tests (test_benchmarks.py, 3-hour stress test)",
-        "W44": "Field Testing Protocol (50+ match recordings required)",
-        "W45": "Documentation System (QUICK_START, API_REFERENCE, TROUBLESHOOTING)",
-        "W46": "Deployment Tools (install.sh, system-check.sh)",
-        "W47": "Monitoring & Alerting (Prometheus, Grafana, 8 critical alerts)",
-        "W48": "Bug Tracking (crash_reporter.py, bug templates)",
-        "W49": "Release Automation (CI/CD pipeline, prepare_release.sh)",
-        "W50": "Compliance & Certification (COMPLIANCE_REPORT.md, Alpha certified)"
-      },
-      "files_created": 59,
-      "loc": "~7500",
-      "certification": "Alpha Release",
-      "integration_ready": true
+      "status": "planned",
+      "notes": "Test plans and performance suites exist; field data collection ongoing",
+      "artifacts": ["tests/"]
     }
-  },
-  "integration_points": [
-    {
-      "from": "infrastructure",
-      "to": "video-pipeline",
-      "interface": "Device Tree + Camera HAL",
-      "status": "verified"
-    },
-    {
-      "from": "video-pipeline",
-      "to": "processing",
-      "interface": "H.265 video files + metadata",
-      "status": "verified"
-    },
-    {
-      "from": "processing",
-      "to": "platform",
-      "interface": "Panoramic video + quality metrics",
-      "status": "verified"
-    },
-    {
-      "from": "platform",
-      "to": "video-pipeline",
-      "interface": "Recording control API",
-      "status": "verified"
-    },
-    {
-      "from": "quality",
-      "to": "all",
-      "interface": "Testing framework + CI/CD",
-      "status": "verified"
-    }
-  ],
-  "test_results": {
-    "unit_tests": "components have individual tests",
-    "integration_tests": "framework complete",
-    "performance_tests": "benchmarks defined",
-    "field_tests": "protocol ready, pending execution"
-  },
-  "repository_stats": {
-    "total_files": 153,
-    "source_files": 112,
-    "test_files": 10,
-    "doc_files": 8,
-    "total_commits": 43,
-    "total_loc": "~18550",
-    "size": "1.2 MB (src + tests + docs)"
-  },
-  "queen_validation": {
-    "all_50_workers_complete": true,
-    "all_components_verified": true,
-    "integration_points_validated": true,
-    "build_systems_present": true,
-    "documentation_complete": true,
-    "ci_cd_configured": true,
-    "ready_for_alpha_release": true
   }
 }

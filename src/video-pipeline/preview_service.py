@@ -17,11 +17,11 @@ class PreviewService:
         self.cam1_process = None
         self.is_streaming = False
 
-        # Match recording resolution but keep FPS low for bandwidth
+        # Smooth 1080p30 preview with clean encoding
         self.width = 1920
         self.height = 1080
-        self.framerate = 10
-        self.preview_bitrate_kbps = 4000
+        self.framerate = 30  # Smooth 30fps preview
+        self.preview_bitrate_kbps = 6000  # Higher bitrate for clean low-light (6Mbps)
 
     def _recording_active(self) -> bool:
         result = subprocess.run(
@@ -46,36 +46,47 @@ class PreviewService:
             "-e",
             "nvarguscamerasrc",
             f"sensor-id={sensor_id}",
+            "sensor-mode=1",  # Mode 1 = 1920x1080 @ 60fps (native)
             "wbmode=1",
             "aelock=false",
-            "exposuretimerange=500 4000",
-            "gainrange=1 8",
-            "saturation=1.2",
+            "exposuretimerange=13000 100000000",  # 13μs to 100ms (allow slower shutter in low light)
+            "gainrange=1 1",  # Unity gain only - no amplification (clean blacks)
+            "saturation=1.1",
             "!",
-            f"video/x-raw(memory:NVMM),width={self.width},height={self.height},framerate={self.framerate}/1",
+            "video/x-raw(memory:NVMM),width=1920,height=1080,framerate=60/1",
             "!",
             "nvvidconv",
             "!",
             "video/x-raw,format=I420",
             "!",
+            "videobalance",
+            "brightness=-0.05",  # Crush dark noise to black
+            "!",
+            "videorate",
+            "drop-only=true",
+            "!",
+            f"video/x-raw,framerate={self.framerate}/1",
+            "!",
             "x264enc",
             f"bitrate={self.preview_bitrate_kbps}",
-            "speed-preset=ultrafast",
-            "tune=zerolatency",
-            f"key-int-max={self.framerate}",
+            "speed-preset=ultrafast",  # Fast encoding for low latency
+            "tune=zerolatency",  # Optimized for streaming
+            "key-int-max=60",  # Keyframe every 2 seconds
+            "bframes=0",  # No B-frames for low latency
+            "sliced-threads=true",
             "threads=2",
-            "cabac=true",
+            "option-string=no-dct-decimate=1:deblock=0,0",  # Clean blacks, no dither
             "!",
             "h264parse",
+            "config-interval=-1",
             "!",
-            "mpegtsmux",
-            "!",
-            "hlssink",
+            "hlssink2",
             f"location={target_dir}/segment%05d.ts",
             f"playlist-location={target_dir}/playlist.m3u8",
-            "max-files=5",
-            "target-duration=2",
-            "playlist-length=3",
+            "max-files=10",
+            "target-duration=2",  # 2-second segments for reasonable latency
+            "playlist-length=10",
+            "send-keyframe-requests=true",
         ]
 
     def _launch_pipeline(self, sensor_id: int, target_dir: Path) -> subprocess.Popen:
@@ -121,6 +132,23 @@ class PreviewService:
                 camera = f"camera {idx}"
                 detail = stderr.strip() or "GStreamer pipeline failed"
                 raise RuntimeError(f"Unable to start preview for {camera}: {detail}")
+
+        # Wait for HLS files to be created before returning success
+        cam0_playlist = cam0_dir / "playlist.m3u8"
+        cam1_playlist = cam1_dir / "playlist.m3u8"
+        max_wait = 6  # seconds (2sec segments at 30fps should start quickly)
+        start_wait = time.time()
+
+        while time.time() - start_wait < max_wait:
+            if cam0_playlist.exists() and cam1_playlist.exists():
+                # Verify playlists have content (not empty)
+                if cam0_playlist.stat().st_size > 50 and cam1_playlist.stat().st_size > 50:
+                    break
+            time.sleep(0.5)
+        else:
+            # Timeout waiting for HLS files
+            self._terminate_processes()
+            raise RuntimeError("HLS files not created within timeout - check GStreamer pipeline")
 
         self.is_streaming = True
 
