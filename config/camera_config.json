@@ -1,0 +1,69 @@
+{
+  "version": "1.0",
+  "cameras": {
+    "0": {
+      "rotation": 0.0,
+      "crop": {
+        "left": 480,
+        "right": 480,
+        "top": 270,
+        "bottom": 270
+      },
+      "correction_type": "barrel",
+      "correction_params": {
+        "k1": 0.0,
+        "k2": 0.0
+      }
+    },
+    "1": {
+      "rotation": 0.0,
+      "crop": {
+        "left": 480,
+        "right": 480,
+        "top": 270,
+        "bottom": 270
+      },
+      "correction_type": "barrel",
+      "correction_params": {
+        "k1": 0.0,
+        "k2": 0.0
+      }
+    }
+  },
+  "presets": {
+    "default": {
+      "name": "Default Settings",
+      "description": "Standard match recording setup",
+      "cameras": {
+        "0": {
+          "rotation": 0.0,
+          "crop": {
+            "left": 480,
+            "right": 480,
+            "top": 270,
+            "bottom": 270
+          },
+          "correction_type": "barrel",
+          "correction_params": {
+            "k1": 0.0,
+            "k2": 0.0
+          }
+        },
+        "1": {
+          "rotation": 0.0,
+          "crop": {
+            "left": 480,
+            "right": 480,
+            "top": 270,
+            "bottom": 270
+          },
+          "correction_type": "barrel",
+          "correction_params": {
+            "k1": 0.0,
+            "k2": 0.0
+          }
+        }
+      }
+    }
+  }
+}
