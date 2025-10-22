@@ -3,10 +3,9 @@
 This directory mirrors the in-field configuration running on the Jetson Orin Nano rigs.
 
 ## Components
-- `recording_manager.py` – Python wrapper around the production shell script. Handles lifecycle, manifest creation, and merge trigger.
-- `preview_service.py` – Independent dual-camera HLS preview service (1080p @ 30fps, 6 Mbps per camera).
-
-The heavy lifting lives in `scripts/record_dual_1080p30.sh`, the same script invoked on the deployed device. Additional helpers (`record_test_simple.sh`, `record_dual_4k30_rotated.sh`, `merge_segments.sh`) are under `scripts/`.
+- `recording_manager.py` – Python wrapper around the production shell script. Handles lifecycle and manifest creation.
+- `preview_service_optimized.py` – Optimised dual-camera HLS preview (720p @ 15 fps, tmpfs-backed segments).
+- `scripts/record_dual_1080p30_optimized.sh` – Production dual-camera recorder invoked by the API.
 
 ## Architecture: Separated Preview & Recording
 
@@ -15,19 +14,19 @@ The heavy lifting lives in `scripts/record_dual_1080p30.sh`, the same script inv
 ### Recording Flow
 1. API calls `RecordingManager.start_recording()`.
 2. API automatically stops `PreviewService` if running.
-3. The manager spawns `record_dual_1080p30.sh`, which starts two independent pipelines:
-   - `nvarguscamerasrc → nvvidconv → x264enc (45 Mbps, 4 threads) → splitmuxsink`
+3. The manager spawns `record_dual_1080p30_optimized.sh`, which starts two independent pipelines:
+   - `nvarguscamerasrc → nvvidconv (rotate + VIC/GPU crop) → x264enc (15 Mbps) → splitmuxsink`
 4. On stop, the manager signals the script, waits for segment finalisation, and writes an upload manifest.
 
-**Output:** `/mnt/recordings/<match_id>/segments/cam{0,1}_*.mp4` (5-minute segments)
+**Output:** `/mnt/recordings/<match_id>/segments/cam{0,1}_*.mkv` (5-minute segments)
 
 ### Preview Flow
 1. API calls `PreviewService.start()`.
 2. Service launches two independent GStreamer pipelines:
-   - `nvarguscamerasrc (sensor-mode=1) → nvvidconv → videobalance → videorate → x264enc (6 Mbps, 2 threads) → hlssink2`
-3. HLS streams available at `/var/www/hls/cam{0,1}/playlist.m3u8`
+   - `nvarguscamerasrc (sensor-mode=0) → nvvidconv (VIC/GPU crop) → nvvidconv (NV12→I420 + scale) → x264enc (2 Mbps, ultrafast) → hlssink2`
+3. Segments are written to `/dev/shm/hls/cam{0,1}/` and synced to `/var/www/hls/cam{0,1}/playlist.m3u8`
 
-**Output:** HLS segments in `/var/www/hls/cam{0,1}/` (2-second segments, 10 files max)
+**Output:** HLS segments in `/var/www/hls/cam{0,1}/` (2-second segments, 10 files max, backed by tmpfs)
 
 **Note:** Preview refuses to start while recording is active (enforced by API layer).
 

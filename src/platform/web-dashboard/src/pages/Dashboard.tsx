@@ -40,6 +40,20 @@ export const Dashboard: React.FC = () => {
 
     setIsStarting(true);
     try {
+      // Check if preview is running and stop it first
+      try {
+        const previewStatus = await apiService.getPreviewStatus();
+        if (previewStatus.streaming) {
+          console.log('Preview is running, stopping it before starting recording...');
+          await apiService.stopPreview();
+          // Small delay to ensure preview is fully stopped
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (previewErr) {
+        // If we can't check preview status, continue anyway
+        console.log('Could not check preview status, continuing with recording start');
+      }
+
       await apiService.startRecording({
         match_id: matchId,
         resolution: '1920x1080',
@@ -230,7 +244,7 @@ export const Dashboard: React.FC = () => {
               <ul className="space-y-1">
                 <li>• Resolution: 1920x1080 @ 30fps (stable output)</li>
                 <li>• Encoder: H.264 x264 software (ultrafast, 4 threads)</li>
-                <li>• Bitrate: 45 Mbps per camera (high quality)</li>
+                <li>• Bitrate: 15 Mbps per camera (balanced quality)</li>
                 <li>• Segments: 5-minute MP4 files (crash-safe)</li>
                 <li>• Mode: Recording only (no preview during recording)</li>
                 <li>• Storage: ~337 MB/min = 50 GB per 150min session</li>

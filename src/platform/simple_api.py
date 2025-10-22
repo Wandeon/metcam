@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent / "video-pipeline"))
 
 from recording_manager import RecordingManager
-from preview_service import PreviewService
+from preview_service_optimized import PreviewServiceOptimized
 
 app = FastAPI(title="FootballVision Pro API")
 
@@ -55,7 +55,7 @@ app.add_middleware(
 )
 
 recording_manager = RecordingManager()
-preview_service = PreviewService()
+preview_service = PreviewServiceOptimized()
 
 # Prometheus metrics
 recording_status_gauge = Gauge('recording_status', 'Recording status (1=active, 0=idle)')
@@ -285,7 +285,7 @@ def list_recordings():
 
         # Check if this directory has segments
         if segments_dir.exists():
-            segment_files = sorted(segments_dir.glob("*.mp4"))
+            segment_files = sorted(list(segments_dir.glob("*.mp4")) + list(segments_dir.glob("*.mkv")))
 
             if segment_files:
                 # Add this match if not already present

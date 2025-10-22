@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Download, Film, RefreshCw } from 'lucide-react';
+import { Download, Film, RefreshCw, Trash2 } from 'lucide-react';
 
 interface RecordingEntry {
   file: string;
@@ -23,6 +23,8 @@ const formatLabel = (file: string) => {
 export const Matches: React.FC = () => {
   const [matches, setMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
+  const [downloadModalMatchId, setDownloadModalMatchId] = useState<string | null>(null);
+  const [deletingMatchId, setDeletingMatchId] = useState<string | null>(null);
 
   const loadMatches = async () => {
     try {
@@ -70,6 +72,38 @@ export const Matches: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const handleDownloadClick = (matchId: string) => {
+    setDownloadModalMatchId(matchId);
+  };
+
+  const handleDownloadModalClose = () => {
+    setDownloadModalMatchId(null);
+  };
+
+  const handleDeleteClick = async (matchId: string) => {
+    if (!confirm(`Are you sure you want to delete recording "${matchId}"?`)) {
+      return;
+    }
+
+    setDeletingMatchId(matchId);
+    try {
+      const response = await fetch(`/api/v1/recordings/${matchId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setMatches(prev => prev.filter(m => m.id !== matchId));
+      } else {
+        alert('Failed to delete recording');
+      }
+    } catch (error) {
+      console.error('Failed to delete recording:', error);
+      alert('Failed to delete recording');
+    } finally {
+      setDeletingMatchId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-4 md:p-6 animate-pulse">Loading recordings…</div>
@@ -89,6 +123,47 @@ export const Matches: React.FC = () => {
         </button>
       </div>
 
+      {downloadModalMatchId && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+          onClick={handleDownloadModalClose}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4">Download Recording</h3>
+            <p className="text-gray-600 mb-4">
+              <strong>{downloadModalMatchId}</strong>
+            </p>
+            <div className="flex flex-col gap-2">
+              {matches.find(m => m.id === downloadModalMatchId)?.files.map((entry) => (
+                <a
+                  key={entry.file}
+                  href={`/recordings/${entry.file}`}
+                  download
+                  className="flex items-center justify-between px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
+                >
+                  <span className="flex items-center">
+                    <Download className="w-4 h-4 mr-2" />
+                    {formatLabel(entry.file)}
+                  </span>
+                  <span className="text-xs opacity-75">{entry.size_mb.toFixed(1)} MB</span>
+                </a>
+              ))}
+            </div>
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={handleDownloadModalClose}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4">
         {matches.map((match) => (
           <div key={match.id} className="bg-white rounded-lg shadow p-4 md:p-6">
@@ -104,18 +179,26 @@ export const Matches: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {match.files.map((entry) => (
-                  <a
-                    key={entry.file}
-                    href={`/recordings/${entry.file}`}
-                    download
-                    className="flex items-center px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
-                  >
-                    <Download className="w-4 h-4 mr-1" />
-                    {formatLabel(entry.file)}
-                    <span className="ml-2 text-xs opacity-75">({entry.size_mb.toFixed(1)} MB)</span>
-                  </a>
-                ))}
+                <button
+                  onClick={() => handleDownloadClick(match.id)}
+                  className="flex items-center px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
+                >
+                  <Download className="w-4 h-4 mr-1" />
+                  Download
+                </button>
+
+                <button
+                  onClick={() => handleDeleteClick(match.id)}
+                  disabled={deletingMatchId === match.id}
+                  className={`flex items-center px-3 py-2 rounded text-sm touch-manipulation ${
+                    deletingMatchId === match.id
+                      ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                      : 'bg-red-600 text-white hover:bg-red-700'
+                  }`}
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  {deletingMatchId === match.id ? 'Deleting...' : 'Delete'}
+                </button>
               </div>
             </div>
           </div>

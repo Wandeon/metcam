@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Dashboard } from '@/pages/Dashboard';
-import { Matches } from '@/pages/Matches';
+import { MatchesEnhanced as Matches } from '@/pages/MatchesEnhanced';
 import { Preview } from '@/pages/Preview';
 import { ActivityLog } from '@/pages/ActivityLog';
 import { Login } from '@/pages/Login';

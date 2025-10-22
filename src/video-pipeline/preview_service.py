@@ -1,205 +1,228 @@
 #!/usr/bin/env python3
 """
-FootballVision Pro - HLS Preview Service
-Full-frame preview at recording resolution with throttled frame rate.
+Preview service for FootballVision Pro
+Uses in-process GStreamer for instant, reliable HLS preview
 """
 
-import signal
-import subprocess
-import time
+import os
+import logging
 from pathlib import Path
+from typing import Optional, Dict
+from threading import Lock
+
+from gstreamer_manager import GStreamerManager
+from pipeline_builders import build_preview_pipeline
+
+logger = logging.getLogger(__name__)
 
 
 class PreviewService:
-    def __init__(self, hls_dir="/var/www/hls"):
-        self.hls_dir = Path(hls_dir)
-        self.cam0_process = None
-        self.cam1_process = None
-        self.is_streaming = False
-
-        # Smooth 1080p30 preview with clean encoding
-        self.width = 1920
-        self.height = 1080
-        self.framerate = 30  # Smooth 30fps preview
-        self.preview_bitrate_kbps = 6000  # Higher bitrate for clean low-light (6Mbps)
-
-    def _recording_active(self) -> bool:
-        result = subprocess.run(
-            "ps aux | grep 'nvarguscamerasrc.*splitmuxsink' | grep -v grep",
-            shell=True,
-            capture_output=True,
-        )
-        return result.returncode == 0 and bool(result.stdout.strip())
-
-    def _cleanup_dir(self, directory: Path) -> None:
-        directory.mkdir(parents=True, exist_ok=True)
-        for pattern in ("*.ts", "*.m3u8"):
-            for item in directory.glob(pattern):
+    """
+    Manages dual-camera HLS preview using in-process GStreamer
+    - Instant start/stop
+    - Independent from recording (can run simultaneously)
+    - Survives page refreshes
+    """
+    
+    def __init__(self, hls_base_dir: str = "/tmp/hls"):
+        self.hls_base_dir = Path(hls_base_dir)
+        self.hls_base_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.gst_manager = GStreamerManager()
+        self.state_lock = Lock()
+        
+        # Camera IDs
+        self.camera_ids = [0, 1]
+        
+        # Track preview state
+        self.preview_active = {cam_id: False for cam_id in self.camera_ids}
+    
+    def get_status(self) -> Dict:
+        """Get current preview status"""
+        with self.state_lock:
+            cameras = {}
+            
+            for cam_id in self.camera_ids:
+                pipeline_name = f'preview_cam{cam_id}'
+                info = self.gst_manager.get_pipeline_status(pipeline_name)
+                
+                cameras[f'camera_{cam_id}'] = {
+                    'active': info is not None,
+                    'state': info['state'] if info else 'stopped',
+                    'uptime': info['uptime'] if info else 0.0,
+                    'hls_url': f'/hls/cam{cam_id}.m3u8'
+                }
+            
+            return {
+                'preview_active': any(info['active'] for info in cameras.values()),
+                'cameras': cameras
+            }
+    
+    def start_preview(self, camera_id: Optional[int] = None) -> Dict:
+        """
+        Start HLS preview for one or both cameras
+        
+        Args:
+            camera_id: Specific camera to start (0 or 1), or None for both
+            
+        Returns:
+            Dict with status and message
+        """
+        with self.state_lock:
+            cameras_to_start = [camera_id] if camera_id is not None else self.camera_ids
+            
+            started_cameras = []
+            failed_cameras = []
+            
+            for cam_id in cameras_to_start:
+                if cam_id not in self.camera_ids:
+                    failed_cameras.append(cam_id)
+                    continue
+                
+                # Check if already running
+                pipeline_name = f'preview_cam{cam_id}'
+                if self.gst_manager.get_pipeline_status(pipeline_name):
+                    logger.info(f"Preview camera {cam_id} already running")
+                    started_cameras.append(cam_id)
+                    continue
+                
                 try:
-                    item.unlink()
-                except FileNotFoundError:
-                    pass
-
-    def _build_pipeline(self, sensor_id: int, target_dir: Path) -> list[str]:
-        return [
-            "gst-launch-1.0",
-            "-e",
-            "nvarguscamerasrc",
-            f"sensor-id={sensor_id}",
-            "sensor-mode=1",  # Mode 1 = 1920x1080 @ 60fps (native)
-            "wbmode=1",
-            "aelock=false",
-            "exposuretimerange=13000 100000000",  # 13μs to 100ms (allow slower shutter in low light)
-            "gainrange=1 1",  # Unity gain only - no amplification (clean blacks)
-            "saturation=1.1",
-            "!",
-            "video/x-raw(memory:NVMM),width=1920,height=1080,framerate=60/1",
-            "!",
-            "nvvidconv",
-            "!",
-            "video/x-raw,format=I420",
-            "!",
-            "videobalance",
-            "brightness=-0.05",  # Crush dark noise to black
-            "!",
-            "videorate",
-            "drop-only=true",
-            "!",
-            f"video/x-raw,framerate={self.framerate}/1",
-            "!",
-            "x264enc",
-            f"bitrate={self.preview_bitrate_kbps}",
-            "speed-preset=ultrafast",  # Fast encoding for low latency
-            "tune=zerolatency",  # Optimized for streaming
-            "key-int-max=60",  # Keyframe every 2 seconds
-            "bframes=0",  # No B-frames for low latency
-            "sliced-threads=true",
-            "threads=2",
-            "option-string=no-dct-decimate=1:deblock=0,0",  # Clean blacks, no dither
-            "!",
-            "h264parse",
-            "config-interval=-1",
-            "!",
-            "hlssink2",
-            f"location={target_dir}/segment%05d.ts",
-            f"playlist-location={target_dir}/playlist.m3u8",
-            "max-files=10",
-            "target-duration=2",  # 2-second segments for reasonable latency
-            "playlist-length=10",
-            "send-keyframe-requests=true",
-        ]
-
-    def _launch_pipeline(self, sensor_id: int, target_dir: Path) -> subprocess.Popen:
-        cmd = self._build_pipeline(sensor_id, target_dir)
-        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-
-    def _terminate_processes(self) -> None:
-        for proc in (self.cam0_process, self.cam1_process):
-            if not proc:
-                continue
-            if proc.poll() is None:
+                    # Build HLS location
+                    hls_location = str(self.hls_base_dir / f"cam{cam_id}.m3u8")
+                    
+                    # Build pipeline
+                    pipeline_str = build_preview_pipeline(cam_id, hls_location)
+                    
+                    # Create pipeline
+                    def on_eos(name, metadata):
+                        logger.info(f"Preview pipeline {name} received EOS")
+                    
+                    def on_error(name, error, debug, metadata):
+                        logger.error(f"Preview pipeline {name} error: {error}, debug: {debug}")
+                    
+                    self.gst_manager.create_pipeline(
+                        name=pipeline_name,
+                        pipeline_description=pipeline_str,
+                        on_eos=on_eos,
+                        on_error=on_error,
+                        metadata={'camera_id': cam_id}
+                    )
+                    
+                    # Start pipeline
+                    self.gst_manager.start_pipeline(pipeline_name)
+                    
+                    self.preview_active[cam_id] = True
+                    started_cameras.append(cam_id)
+                    logger.info(f"Preview camera {cam_id} started")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to start preview camera {cam_id}: {e}")
+                    failed_cameras.append(cam_id)
+            
+            if not started_cameras:
+                return {
+                    'success': False,
+                    'message': 'Failed to start any preview cameras',
+                    'failed_cameras': failed_cameras
+                }
+            
+            return {
+                'success': True,
+                'message': f'Preview started for cameras: {started_cameras}',
+                'cameras_started': started_cameras,
+                'cameras_failed': failed_cameras
+            }
+    
+    def stop_preview(self, camera_id: Optional[int] = None) -> Dict:
+        """
+        Stop HLS preview for one or both cameras
+        
+        Args:
+            camera_id: Specific camera to stop (0 or 1), or None for both
+            
+        Returns:
+            Dict with status and message
+        """
+        with self.state_lock:
+            cameras_to_stop = [camera_id] if camera_id is not None else self.camera_ids
+            
+            stopped_cameras = []
+            failed_cameras = []
+            
+            for cam_id in cameras_to_stop:
+                if cam_id not in self.camera_ids:
+                    failed_cameras.append(cam_id)
+                    continue
+                
+                pipeline_name = f'preview_cam{cam_id}'
+                
                 try:
-                    proc.send_signal(signal.SIGINT)
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                except Exception:
-                    proc.kill()
-        self.cam0_process = None
-        self.cam1_process = None
-        self.is_streaming = False
-
-    def start(self) -> dict:
-        if self.is_streaming:
-            raise RuntimeError("Preview already streaming")
-        if self._recording_active():
-            raise RuntimeError("Stop the recording before starting the preview stream")
-
-        cam0_dir = self.hls_dir / "cam0"
-        cam1_dir = self.hls_dir / "cam1"
-        self._cleanup_dir(cam0_dir)
-        self._cleanup_dir(cam1_dir)
-
-        self.cam0_process = self._launch_pipeline(0, cam0_dir)
-        time.sleep(0.5)
-        self.cam1_process = self._launch_pipeline(1, cam1_dir)
-        time.sleep(1.0)
-
-        for idx, proc in enumerate((self.cam0_process, self.cam1_process)):
-            if proc and proc.poll() is not None:
-                stderr = proc.stderr.read().decode(errors='ignore') if proc.stderr else ''
-                self._terminate_processes()
-                camera = f"camera {idx}"
-                detail = stderr.strip() or "GStreamer pipeline failed"
-                raise RuntimeError(f"Unable to start preview for {camera}: {detail}")
-
-        # Wait for HLS files to be created before returning success
-        cam0_playlist = cam0_dir / "playlist.m3u8"
-        cam1_playlist = cam1_dir / "playlist.m3u8"
-        max_wait = 6  # seconds (2sec segments at 30fps should start quickly)
-        start_wait = time.time()
-
-        while time.time() - start_wait < max_wait:
-            if cam0_playlist.exists() and cam1_playlist.exists():
-                # Verify playlists have content (not empty)
-                if cam0_playlist.stat().st_size > 50 and cam1_playlist.stat().st_size > 50:
-                    break
-            time.sleep(0.5)
-        else:
-            # Timeout waiting for HLS files
-            self._terminate_processes()
-            raise RuntimeError("HLS files not created within timeout - check GStreamer pipeline")
-
-        self.is_streaming = True
-
+                    # Stop pipeline (graceful with EOS)
+                    self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=True, timeout=3.0)
+                    
+                    self.preview_active[cam_id] = False
+                    stopped_cameras.append(cam_id)
+                    logger.info(f"Preview camera {cam_id} stopped")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to stop preview camera {cam_id}: {e}")
+                    failed_cameras.append(cam_id)
+            
+            if not stopped_cameras:
+                return {
+                    'success': False,
+                    'message': 'No preview cameras were stopped',
+                    'failed_cameras': failed_cameras
+                }
+            
+            return {
+                'success': True,
+                'message': f'Preview stopped for cameras: {stopped_cameras}',
+                'cameras_stopped': stopped_cameras,
+                'cameras_failed': failed_cameras
+            }
+    
+    def restart_preview(self, camera_id: Optional[int] = None) -> Dict:
+        """
+        Restart HLS preview for one or both cameras
+        
+        Args:
+            camera_id: Specific camera to restart (0 or 1), or None for both
+            
+        Returns:
+            Dict with status and message
+        """
+        # Stop first
+        stop_result = self.stop_preview(camera_id)
+        
+        # Start again
+        start_result = self.start_preview(camera_id)
+        
         return {
-            "status": "streaming",
-            "resolution": f"{self.width}x{self.height}",
-            "framerate": self.framerate,
-            "cam0_url": "/hls/cam0/playlist.m3u8",
-            "cam1_url": "/hls/cam1/playlist.m3u8",
-            "cam0_pid": self.cam0_process.pid if self.cam0_process else None,
-            "cam1_pid": self.cam1_process.pid if self.cam1_process else None,
+            'success': start_result['success'],
+            'message': f"Restart: {stop_result['message']} -> {start_result['message']}",
+            'stop_result': stop_result,
+            'start_result': start_result
         }
-
-    def stop(self) -> dict:
-        if not self.is_streaming:
-            return {"status": "not_streaming"}
-
-        self._terminate_processes()
-        return {"status": "stopped"}
-
-    def get_status(self) -> dict:
-        if not self.is_streaming:
-            return {"status": "idle", "streaming": False}
-
-        cam0_running = self.cam0_process.poll() is None if self.cam0_process else False
-        cam1_running = self.cam1_process.poll() is None if self.cam1_process else False
-
-        return {
-            "status": "streaming",
-            "streaming": True,
-            "resolution": f"{self.width}x{self.height}",
-            "framerate": self.framerate,
-            "cam0_running": cam0_running,
-            "cam1_running": cam1_running,
-            "cam0_url": "/hls/cam0/playlist.m3u8",
-            "cam1_url": "/hls/cam1/playlist.m3u8",
-        }
+    
+    def cleanup(self):
+        """Cleanup resources (called on shutdown)"""
+        logger.info("PreviewService cleanup")
+        for cam_id in self.camera_ids:
+            if self.preview_active[cam_id]:
+                try:
+                    self.stop_preview(cam_id)
+                except Exception as e:
+                    logger.error(f"Error stopping preview camera {cam_id} during cleanup: {e}")
 
 
-if __name__ == "__main__":
-    preview = PreviewService()
-    print("Starting preview stream. Press Ctrl+C to stop.")
-    try:
-        result = preview.start()
-        print("Preview URLs:")
-        print(f"  Camera 0: {result['cam0_url']}")
-        print(f"  Camera 1: {result['cam1_url']}")
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        preview.stop()
-        print("Preview stopped.")
+# Global instance
+_preview_service: Optional[PreviewService] = None
+
+
+def get_preview_service() -> PreviewService:
+    """Get or create the global PreviewService instance"""
+    global _preview_service
+    if _preview_service is None:
+        _preview_service = PreviewService()
+    return _preview_service

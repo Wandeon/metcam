@@ -1,503 +1,370 @@
-# Team Deployment Guide - FootballVision Pro
+# FootballVision Pro Deployment Guide
 
-## Overview
-This guide explains how to push your team's work to the GitHub repository following the established workflow.
+This guide covers the steps required to install and verify the current FootballVision Pro stack on a Jetson Orin Nano device. The deployment enables the web UI, native 4K recording pipeline, preview pipeline, and matches download workflow.
+
+## 1. Prerequisites
+- NVIDIA Jetson Orin Nano (8 GB) running JetPack 6.1 (R36.4.4)
+- SSH access with sudo privileges
+- Dual IMX477 cameras connected to ports `CSI 0` and `CSI 1`
+- Stable power supply and 64 GB+ of free NVMe storage
+- Optional: Internet access for remote uploads (SFTP)
+
+## 2. Clone the Repository
+```bash
+cd /home/mislav
+git clone https://github.com/your-org/footballvision-pro.git
+cd footballvision-pro
+```
+
+## 3. Install Dependencies and Services
+Run the bundled installer; it configures GStreamer, creates directories, and installs the `footballvision-api` service.
+
+```bash
+cd deploy
+./install.sh
+```
+
+What the script does:
+- Installs required system packages (`gstreamer`, `python3-pip`, `ffmpeg`, etc.)
+- Installs core Python dependencies (`fastapi`, `uvicorn`, `prometheus`, etc.)
+- Creates `/mnt/recordings` with the correct permissions
+- Installs the `footballvision-api-enhanced.service` systemd unit
+- Configures CPU frequency governor to performance mode for stable encoding
+
+## 4. Configure Runtime Directories
+```bash
+sudo mkdir -p /var/www/hls /var/lib/footballvision
+sudo chown $USER:$USER /var/www/hls /var/lib/footballvision
+```
+
+## 5. Set Power Mode for Recording
+
+The native 4K recording pipeline requires 25W power mode for optimal performance:
+
+```bash
+sudo nvpmodel -m 1  # Set to 25W mode
+sudo nvpmodel -q    # Verify mode is set to 1
+```
+
+**Available Power Modes**:
+- Mode 0: 15W (preview only, not suitable for recording)
+- Mode 1: 25W (required for native 4K recording)
+
+## 6. Start the Enhanced API
+```bash
+sudo systemctl start footballvision-api-enhanced
+sudo systemctl enable footballvision-api-enhanced  # optional: run on boot
+```
+
+Verify the service:
+```bash
+sudo systemctl status footballvision-api-enhanced
+curl http://localhost:8000/api/v1/status | python3 -m json.tool
+```
+
+Expected response:
+```json
+{
+  "status": "idle",
+  "recording": false,
+  "mode": "normal",
+  "mode_description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling",
+  "recording_details": { ... },
+  "preview": { ... },
+  "modes": { ... }
+}
+```
+
+## 7. Validate Recording and Preview Pipelines
+
+### Test Preview Stream
+
+**Start preview** (1280×720 @ 15 fps):
+```bash
+curl -X POST http://localhost:8000/api/v1/preview/start \
+  -H 'Content-Type: application/json' \
+  -d '{"mode": "normal"}'
+```
+
+Confirm `.ts` segments appear under `/var/www/hls/cam0/` and `/var/www/hls/cam1/` (720p, ~2 Mbps).
+
+**Stop preview**:
+```bash
+curl -X POST http://localhost:8000/api/v1/preview/stop
+```
+
+### Test Native 4K Recording
+
+**Start recording** (Native 4K: 2880×1620 @ 25 fps):
+```bash
+curl -X POST http://localhost:8000/api/v1/recording \
+  -H 'Content-Type: application/json' \
+  -d '{"match_id":"test_match"}'
+```
+
+**Expected Behavior**:
+- Recording starts in "normal" mode (Native 4K pipeline)
+- Resolution: 2880×1620 (56% FOV, center crop from 4K sensor)
+- Framerate: 25 fps (steady, no drops)
+- Bitrate: 18 Mbps per camera
+- CPU usage: ~88% (166% on cores 0-2, 162% on cores 3-5)
+- Segment files created every 5 minutes
+
+**Monitor recording** (optional):
+```bash
+# Check status
+curl http://localhost:8000/api/v1/status | python3 -m json.tool
+
+# Monitor CPU usage
+top -p $(pgrep -d',' gst-launch)
+
+# Check CPU frequency (should be 2.0 GHz)
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq
+```
+
+**Stop recording** (wait at least 30 seconds for a valid test):
+```bash
+curl -X DELETE http://localhost:8000/api/v1/recording
+```
+
+**Verify output files**:
+```bash
+ls -lh /mnt/recordings/test_match/segments/
+```
+
+**Expected Output**:
+- MKV segments: `cam0_00000.mkv`, `cam1_00000.mkv`
+- Segment size: ~135 MB per camera per minute
+- File format: Matroska (MKV) with H.264 video
+
+**Verify framerate and resolution**:
+```bash
+ffprobe -v error -select_streams v:0 \
+  -show_entries stream=width,height,avg_frame_rate,nb_frames \
+  /mnt/recordings/test_match/segments/cam0_00000.mkv
+```
+
+Expected for 30-second recording:
+- Width: 2880
+- Height: 1620
+- FPS: 25/1
+- Frames: ~750
+
+### Recording Modes
+
+The system supports multiple recording modes:
+
+| Mode | Resolution | FPS | FOV | Bitrate | Use Case |
+|------|------------|-----|-----|---------|----------|
+| **normal** (default) | 2880×1620 | 25 | 56% | 18 Mbps | Match-day recording |
+| **no_crop** | 1920×1080 | 30 | 100% | 15 Mbps | Camera setup/alignment |
+| **optimized** | 2880×1620 | 25 | 56% | 18 Mbps | Alias for normal |
+
+To test a specific mode:
+```bash
+curl -X POST http://localhost:8000/api/v1/recording \
+  -H 'Content-Type: application/json' \
+  -d '{"match_id":"setup_test", "mode":"no_crop"}'
+```
+
+### Performance Validation
+
+After successful test recording, validate system performance:
+
+```bash
+# Verify power mode remained at 25W
+sudo nvpmodel -q
+
+# Check CPU frequency didn't throttle
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq
+# Should show: 2000000 (2.0 GHz)
+
+# Check thermal state
+cat /sys/class/thermal/thermal_zone*/temp
+# Should be < 70000 (70°C during recording)
+
+# Verify framerate from actual recording
+ffprobe -v error -count_frames -select_streams v:0 \
+  -show_entries stream=nb_read_frames,avg_frame_rate \
+  /mnt/recordings/test_match/segments/cam0_00000.mkv
+# Should show: 25/1 fps, ~750 frames for 30s recording
+```
+
+### Web UI Validation
+
+**Access Dashboard**:
+1. Open web browser to `http://<device-ip>:8000`
+2. Navigate to **Dashboard** page
+3. Verify recording controls are functional
+
+**Check Matches**:
+1. Navigate to **Matches** tab
+2. Verify "test_match" appears with:
+   - Both camera segments listed
+   - Correct file sizes (~135 MB)
+   - Download links functional
+
+**Test Preview Mode**:
+1. Navigate to **Preview** page
+2. Click "Start Preview"
+3. Verify dual camera streams load
+4. Test fullscreen toggle (should not restart stream)
+5. Stop preview
+
+## 8. Optional: Configure SFTP Uploads
+
+Set environment variables in `src/platform/api-server/.env`:
+```
+SFTP_HOST=example.com
+SFTP_USERNAME=username
+SFTP_PASSWORD=secret
+SFTP_REMOTE_DIR=/recordings
+```
+
+Restart the service:
+```bash
+sudo systemctl restart footballvision-api-enhanced
+```
+
+Completed matches will upload automatically after the manifest delay.
+
+## 9. Maintenance Commands
+
+**Service Management**:
+```bash
+# Check logs
+journalctl -u footballvision-api-enhanced -f
+
+# Restart service
+sudo systemctl restart footballvision-api-enhanced
+
+# Stop service
+sudo systemctl stop footballvision-api-enhanced
+
+# Check service status
+systemctl status footballvision-api-enhanced
+```
+
+**Cleanup**:
+```bash
+# Clear preview cache
+sudo rm -rf /var/www/hls/*
+
+# Remove specific match
+sudo rm -rf /mnt/recordings/<match_id>
+
+# Check storage usage
+df -h /mnt/recordings
+du -sh /mnt/recordings/*
+```
+
+**System Monitoring**:
+```bash
+# Monitor CPU temperature
+watch -n 1 cat /sys/class/thermal/thermal_zone*/temp
+
+# Monitor CPU frequency
+watch -n 1 cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
+
+# Monitor disk I/O
+iostat -x 1
+
+# Monitor active recording processes
+watch -n 1 'ps aux | grep gst-launch'
+```
+
+## 10. Troubleshooting
+
+### Recording Won't Start
+
+**Check power mode**:
+```bash
+sudo nvpmodel -q  # Should show mode 1 (25W)
+```
+
+**Check cameras detected**:
+```bash
+ls /dev/video*  # Should show video0 and video1
+```
+
+**Check storage space**:
+```bash
+df -h /mnt/recordings  # Need >50 GB free
+```
+
+**Check service logs**:
+```bash
+journalctl -u footballvision-api-enhanced -n 50
+```
+
+### Frame Drops During Recording
+
+**Symptoms**: Actual fps < 25 fps
+
+**Check CPU throttling**:
+```bash
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq
+# Should be 2000000 (2.0 GHz), not lower
+```
+
+**Check temperature**:
+```bash
+cat /sys/class/thermal/thermal_zone*/temp
+# Should be < 80000 (80°C)
+```
+
+**Check other processes**:
+```bash
+top  # Verify no other heavy processes running
+```
+
+### Green or Grey Screen in Recording
+
+**Cause**: Pipeline configuration error (using nvvidconv crop instead of videocrop)
+
+**Fix**: Verify recording script uses correct pipeline sequence:
+```bash
+cat /home/mislav/footballvision-pro/scripts/record_dual_native4k_55fov.sh | grep -A 5 videocrop
+```
+
+Should see: `nvvidconv → videorate → videocrop → videoconvert`
+
+### UI Not Updating Recording State
+
+**Check API response**:
+```bash
+curl http://localhost:8000/api/v1/status | python3 -m json.tool
+```
+
+Should show top-level `"status": "recording"` when active.
+
+**Check browser console**: Press F12 → Console tab → look for API errors
+
+## 11. Technical Documentation
+
+For detailed technical information about the recording pipeline:
+
+- **[Recording Pipeline Technical Reference](./docs/technical/RECORDING_PIPELINE.md)** - Complete pipeline architecture, GStreamer details, performance characteristics
+- **[API Reference](./docs/technical/API_REFERENCE.md)** - REST API endpoints and usage
+- **[Troubleshooting Guide](./docs/user/TROUBLESHOOTING.md)** - Common issues and solutions
+
+## 12. Post-Deployment Checklist
+
+- [ ] Both cameras detected (`ls /dev/video*`)
+- [ ] Power mode set to 25W (`sudo nvpmodel -q`)
+- [ ] API service running (`systemctl status footballvision-api-enhanced`)
+- [ ] Test recording completes successfully
+- [ ] Framerate verified at 25 fps
+- [ ] Web UI accessible and functional
+- [ ] Matches appear in dashboard
+- [ ] Preview stream works without interruption
+- [ ] Storage mounted at `/mnt/recordings`
+- [ ] Sufficient free space (>50 GB)
+
+The device is now ready for match-day operation with the native 4K recording pipeline.
 
 ---
 
-## Prerequisites
-
-Before you start, ensure you have:
-- ✅ Completed all assigned components for your team
-- ✅ All code committed to your local feature branches
-- ✅ Comprehensive documentation (README.md in each component)
-- ✅ Tests passing
-- ✅ Working in the metcam repository: `/home/admin/metcam`
-
----
-
-## Deployment Steps
-
-### Step 1: Navigate to Repository
-
-```bash
-cd /home/admin/metcam
-```
-
-### Step 2: Verify Your Work
-
-Check that all your work is committed:
-
-```bash
-# Check current branch
-git branch --show-current
-
-# View your commits
-git log --oneline | head -20
-
-# Check for uncommitted changes
-git status
-```
-
-**Expected**: Clean working tree, all changes committed.
-
-### Step 3: Switch to Develop Branch
-
-```bash
-git checkout develop
-git pull origin develop  # Get latest changes
-```
-
-### Step 4: Merge Your Feature Branches
-
-If you worked on multiple feature branches (like W1-W10), merge them:
-
-```bash
-# Example for Infrastructure Team (adapt to your team)
-git merge --no-ff feature/your-component-1 -m "Merge: Your Component 1"
-git merge --no-ff feature/your-component-2 -m "Merge: Your Component 2"
-# ... continue for all your feature branches
-```
-
-**Alternative**: If all work is already in develop (like after cherry-picking), skip to Step 5.
-
-### Step 5: Verify Branch Status
-
-```bash
-# Check how many commits ahead of remote
-git status
-
-# View what will be pushed
-git log origin/develop..develop --oneline
-```
-
-### Step 6: Push to GitHub
-
-**⚠️ IMPORTANT: SSH Deploy Key Issue**
-
-The repository has SSH deploy keys that may be read-only. If SSH push fails, use HTTPS instead.
-
-#### Try SSH First:
-
-```bash
-git push origin develop
-```
-
-#### If SSH Fails (Permission Denied Error):
-
-Switch to HTTPS and retry:
-
-```bash
-# Switch remote URL to HTTPS
-git remote set-url origin https://github.com/Wandeon/metcam.git
-
-# Push using HTTPS
-git push origin develop
-```
-
-**Note**: HTTPS authentication will use cached credentials from the system.
-
-### Step 7: Verify Push Success
-
-Confirm your code is on GitHub:
-
-```bash
-# Check remote branch
-git log origin/develop --oneline | head -10
-
-# Verify sync
-git status
-```
-
-**Expected Output**: `Your branch is up to date with 'origin/develop'`
-
----
-
-## Team-Specific Examples
-
-### Video Pipeline Team (W11-W20)
-
-```bash
-cd /home/admin/metcam
-git checkout develop
-git pull origin develop
-
-# Merge your feature branches
-git merge --no-ff feature/camera-capture -m "Merge: Camera capture system"
-git merge --no-ff feature/encoding -m "Merge: Video encoding pipeline"
-git merge --no-ff feature/streaming -m "Merge: RTSP streaming"
-# ... merge all W11-W20 components
-
-# Push (use HTTPS if SSH fails)
-git push origin develop
-
-# Verify
-git log origin/develop --oneline | head -10
-```
-
-### Processing Team (W21-W30)
-
-```bash
-cd /home/admin/metcam
-git checkout develop
-git pull origin develop
-
-# Merge your feature branches
-git merge --no-ff feature/calibration -m "Merge: Camera calibration"
-git merge --no-ff feature/stitching -m "Merge: Panoramic stitching"
-git merge --no-ff feature/compression -m "Merge: Video compression"
-# ... merge all W21-W30 components
-
-# Push (use HTTPS if SSH fails)
-git push origin develop
-
-# Verify
-git log origin/develop --oneline | head -10
-```
-
-### Platform Team (W31-W40)
-
-```bash
-cd /home/admin/metcam
-git checkout develop
-git pull origin develop
-
-# Merge your feature branches
-git merge --no-ff feature/web-interface -m "Merge: Web interface"
-git merge --no-ff feature/rest-api -m "Merge: REST API"
-git merge --no-ff feature/cloud-integration -m "Merge: Cloud upload"
-# ... merge all W31-W40 components
-
-# Push (use HTTPS if SSH fails)
-git push origin develop
-
-# Verify
-git log origin/develop --oneline | head -10
-```
-
-### Quality Team (W41-W50)
-
-```bash
-cd /home/admin/metcam
-git checkout develop
-git pull origin develop
-
-# Merge your feature branches
-git merge --no-ff feature/test-strategy -m "Merge: Test strategy"
-git merge --no-ff feature/integration-tests -m "Merge: Integration tests"
-git merge --no-ff feature/performance-tests -m "Merge: Performance tests"
-# ... merge all W41-W50 components
-
-# Push (use HTTPS if SSH fails)
-git push origin develop
-
-# Verify
-git log origin/develop --oneline | head -10
-```
-
----
-
-## Troubleshooting
-
-### Issue: "Permission denied" when pushing via SSH
-
-**Solution**: Switch to HTTPS
-
-```bash
-git remote set-url origin https://github.com/Wandeon/metcam.git
-git push origin develop
-```
-
-### Issue: "Your branch is behind origin/develop"
-
-**Solution**: Pull and rebase
-
-```bash
-git pull origin develop --rebase
-git push origin develop
-```
-
-### Issue: Merge conflicts
-
-**Solution**: Resolve conflicts manually
-
-```bash
-# Identify conflicting files
-git status
-
-# Edit conflicting files
-# Look for <<<<<<< HEAD markers
-
-# After resolving
-git add <conflicting-files>
-git commit -m "Resolve merge conflicts"
-git push origin develop
-```
-
-### Issue: "Authentication failed" with HTTPS
-
-**Solution**: Check credentials
-
-```bash
-# Clear credential cache
-git credential reject protocol=https host=github.com
-
-# Try push again (will prompt for credentials)
-git push origin develop
-```
-
-### Issue: Accidentally pushed to wrong branch
-
-**Solution**: Contact Queen immediately - DO NOT force push
-
----
-
-## Post-Push Verification Checklist
-
-After pushing, verify everything is correct:
-
-```bash
-# 1. Check remote log
-git log origin/develop --oneline | head -20
-
-# 2. Verify your commits are present
-git log origin/develop --grep="your-team-name\|W[0-9]" --oneline
-
-# 3. Check file structure on remote
-git ls-tree -r --name-only origin/develop | grep "src/your-team/"
-
-# 4. Confirm branch sync
-git status
-# Should say: "Your branch is up to date with 'origin/develop'"
-```
-
----
-
-## Notification to Queen
-
-After successful push, send notification via Telegram:
-
-```bash
-# Use MCP Telegram tool (if available in your session)
-# Or manually report via team communication channel
-```
-
-**Message Template**:
-
-```
-✅ [TEAM NAME] - DEPLOYMENT COMPLETE
-
-Status: Successfully pushed to GitHub
-
-Components Delivered:
-- W##: [Component Name]
-- W##: [Component Name]
-- ... (list all your components)
-
-Metrics:
-- Total Commits: [number]
-- Lines of Code: [approximate]
-- Files Created: [number]
-
-Repository: github.com/Wandeon/metcam
-Branch: develop
-Status: ✅ Pushed and verified
-
-All [TEAM NAME] work is now on GitHub and ready for Queen review.
-```
-
----
-
-## Git Workflow Summary
-
-```
-1. Work on feature branches
-   └── feature/your-component
-
-2. Commit regularly
-   └── git commit -m "feat(team): descriptive message"
-
-3. Switch to develop
-   └── git checkout develop
-
-4. Merge your work
-   └── git merge --no-ff feature/your-component
-
-5. Push to GitHub
-   └── git push origin develop (or HTTPS if SSH fails)
-
-6. Verify
-   └── git log origin/develop
-
-7. Notify Queen
-   └── Send completion message
-```
-
----
-
-## Commit Message Convention
-
-Follow this format for all commits:
-
-```
-<type>(<scope>): <description>
-
-[optional body]
-```
-
-**Types**:
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation
-- `test`: Tests
-- `refactor`: Code refactoring
-- `perf`: Performance improvement
-- `chore`: Maintenance
-
-**Scopes**:
-- `infrastructure`: W1-W10
-- `video-pipeline`: W11-W20
-- `processing`: W21-W30
-- `platform`: W31-W40
-- `quality`: W41-W50
-
-**Examples**:
-
-```bash
-git commit -m "feat(video-pipeline): W11 camera capture with dual IMX477"
-git commit -m "feat(processing): W23 GPU-accelerated stitching"
-git commit -m "feat(platform): W35 real-time status dashboard"
-git commit -m "docs(quality): Complete testing strategy documentation"
-```
-
----
-
-## Security Notes
-
-- ✅ **DO**: Push code, documentation, tests
-- ✅ **DO**: Include configuration templates
-- ❌ **DON'T**: Push secrets, API keys, passwords
-- ❌ **DON'T**: Push large binary files (>10MB)
-- ❌ **DON'T**: Push temporary/debug files
-- ❌ **DON'T**: Force push to develop branch
-
-**Before pushing, check**:
-
-```bash
-# Look for common secret patterns
-git diff origin/develop..develop | grep -iE "(password|api_key|secret|token)" || echo "No secrets found"
-
-# Check file sizes
-git diff --stat origin/develop..develop
-```
-
----
-
-## Quick Reference Commands
-
-```bash
-# Status check
-git status
-git branch --show-current
-git log --oneline | head -10
-
-# Switch to develop
-git checkout develop
-git pull origin develop
-
-# Merge work
-git merge --no-ff feature/your-component -m "Merge: Your component"
-
-# Push (SSH)
-git push origin develop
-
-# Push (HTTPS if SSH fails)
-git remote set-url origin https://github.com/Wandeon/metcam.git
-git push origin develop
-
-# Verify
-git log origin/develop --oneline | head -10
-git status
-```
-
----
-
-## Getting Help
-
-If you encounter issues not covered in this guide:
-
-1. **Check git status**: `git status` often shows what's wrong
-2. **View error messages**: Read the full error output
-3. **Check logs**: `git log --oneline --graph --all`
-4. **Ask Queen**: Report via Telegram with:
-   - What you were trying to do
-   - Full error message
-   - Output of `git status`
-
----
-
-## Success Criteria
-
-Your deployment is successful when:
-
-- ✅ `git status` shows: "Your branch is up to date with 'origin/develop'"
-- ✅ `git log origin/develop` shows your commits
-- ✅ No uncommitted changes in `git status`
-- ✅ All team components visible in remote branch
-- ✅ Queen notified of completion
-
----
-
-## Example: Complete Deployment Session
-
-```bash
-# 1. Navigate
-cd /home/admin/metcam
-
-# 2. Check status
-git status
-git branch --show-current  # Should be 'develop'
-
-# 3. Verify commits
-git log --oneline | head -20
-
-# 4. Check what will be pushed
-git log origin/develop..develop --oneline
-echo "Commits to push: $(git rev-list --count origin/develop..develop)"
-
-# 5. Push (try SSH first)
-git push origin develop
-
-# 6. If SSH fails, use HTTPS
-git remote set-url origin https://github.com/Wandeon/metcam.git
-git push origin develop
-
-# 7. Verify success
-git log origin/develop --oneline | head -10
-git status
-
-# 8. Expected output
-# Your branch is up to date with 'origin/develop'.
-# nothing to commit, working tree clean
-
-# ✅ SUCCESS!
-```
-
----
-
-## Final Notes
-
-- **Timeline**: Push your work as soon as all components are complete and tested
-- **Coordination**: Check with other teams if you see conflicts
-- **Documentation**: Ensure all README.md files are comprehensive
-- **Testing**: Run all tests before pushing
-- **Review**: Self-review your commits before pushing
-
-**Good luck with your deployment!** 🚀
-
----
-
-**Document Version**: 1.0
-**Last Updated**: 2025-09-30
-**Created By**: Infrastructure Team
-**For**: All FootballVision Pro Development Teams
+**Document Version**: 2.0
+**Last Updated**: October 17, 2025
+**Pipeline**: Native 4K @ 25fps (2880×1620, 56% FOV)

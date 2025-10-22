@@ -6,13 +6,18 @@ interface CameraPreviewProps {
   cameraId: number;
   streamUrl: string;
   title: string;
+  resolution?: string;
+  framerate?: number;
 }
 
 export const CameraPreview: React.FC<CameraPreviewProps> = ({
   streamUrl,
   title,
+  resolution = '1920x1080',
+  framerate = 30,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const hlsRef = useRef<Hls | null>(null);
@@ -157,24 +162,7 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
     });
   };
 
-  // Reattach HLS when switching between normal and fullscreen views
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !hlsRef.current) return;
-
-    // Ensure HLS is attached to the current video element
-    if (hlsRef.current.media !== video) {
-      try {
-        hlsRef.current.detachMedia();
-        hlsRef.current.attachMedia(video);
-        video.play().catch((err) => {
-          console.error('Playback failed after reattach:', err);
-        });
-      } catch (err) {
-        console.error('Failed to reattach HLS:', err);
-      }
-    }
-  }, [isFullscreen]);
+  // No reattachment needed - single video element shared between views
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -220,49 +208,60 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
   }, [isFullscreen, zoom]);
 
   return (
-    <>
-      {/* Normal view */}
-      <div className={`bg-gray-900 rounded-lg overflow-hidden ${isFullscreen ? 'hidden' : ''}`}>
-        <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center">
-            <Video className="w-4 h-4 text-green-500 mr-2" />
-            <span className="text-white font-medium">{title}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-400">1920x1080 @ 1fps</span>
-            <button
-              onClick={enterFullscreen}
-              className="text-gray-400 hover:text-white transition-colors"
-              title="Open fullscreen with zoom controls"
-            >
-              <Maximize2 className="w-4 h-4" />
-            </button>
-          </div>
+    <div className={isFullscreen ? "fixed inset-0 z-50 bg-black flex flex-col" : "bg-gray-900 rounded-lg overflow-hidden"}>
+      {/* Header */}
+      <div className={isFullscreen ? "bg-gray-900 px-6 py-4 flex items-center justify-between" : "bg-gray-800 px-4 py-2 flex items-center justify-between"}>
+        <div className="flex items-center gap-4">
+          <Video className={isFullscreen ? "w-5 h-5 text-green-500" : "w-4 h-4 text-green-500 mr-2"} />
+          <span className={isFullscreen ? "text-white font-semibold text-lg" : "text-white font-medium"}>{title}</span>
+          {isFullscreen && <span className="text-gray-400 text-sm">{resolution} @ {framerate}fps</span>}
         </div>
+        <div className="flex items-center gap-3">
+          {!isFullscreen && <span className="text-xs text-gray-400">{resolution} @ {framerate}fps</span>}
+          {isFullscreen && <span className="text-white text-sm">Zoom: {zoom.toFixed(1)}x</span>}
+          <button
+            onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+            className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded"
+            title={isFullscreen ? "Exit fullscreen (ESC)" : "Open fullscreen with zoom controls"}
+          >
+            {isFullscreen ? <X className="w-6 h-6" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
 
+      {/* Video container */}
+      <div
+        ref={containerRef}
+        className={isFullscreen ? "flex-1 relative overflow-hidden" : "relative aspect-video bg-black cursor-pointer"}
+        onClick={!isFullscreen ? enterFullscreen : undefined}
+        title={!isFullscreen ? "Click for fullscreen with zoom controls" : undefined}
+      >
+        {loading && (
+          <div className="absolute inset-0 flex items-center justify-center z-10">
+            <div className={isFullscreen ? "text-white text-lg" : "text-white text-sm"}>Loading stream...</div>
+          </div>
+        )}
+
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75 z-10">
+            <div className="text-center">
+              <AlertCircle className={isFullscreen ? "w-16 h-16 text-yellow-500 mx-auto mb-4" : "w-12 h-12 text-yellow-500 mx-auto mb-2"} />
+              <p className={isFullscreen ? "text-white text-lg" : "text-white text-sm"}>{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Single video element - stays mounted */}
         <div
-          className="relative aspect-video bg-black cursor-pointer"
-          onClick={enterFullscreen}
-          title="Click for fullscreen with zoom controls"
+          className="absolute inset-0 flex items-center justify-center"
+          style={isFullscreen ? {
+            transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+            transition: 'transform 0.2s ease-out',
+          } : undefined}
         >
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-white text-sm">Loading stream...</div>
-            </div>
-          )}
-
-          {error && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75">
-              <div className="text-center">
-                <AlertCircle className="w-12 h-12 text-yellow-500 mx-auto mb-2" />
-                <p className="text-white text-sm">{error}</p>
-              </div>
-            </div>
-          )}
-
           <video
             ref={videoRef}
-            className="w-full h-full object-contain"
+            className={isFullscreen ? "max-w-full max-h-full object-contain" : "w-full h-full object-contain"}
             muted
             playsInline
             controls={false}
@@ -270,66 +269,8 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
         </div>
       </div>
 
-      {/* Fullscreen view */}
+      {/* Control panel - only in fullscreen */}
       {isFullscreen && (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Header */}
-      <div className="bg-gray-900 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Video className="w-5 h-5 text-green-500" />
-          <span className="text-white font-semibold text-lg">{title}</span>
-          <span className="text-gray-400 text-sm">1920x1080 @ 1fps</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-white text-sm">Zoom: {zoom.toFixed(1)}x</span>
-          <button
-            onClick={exitFullscreen}
-            className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded"
-            title="Exit fullscreen (ESC)"
-          >
-            <X className="w-6 h-6" />
-          </button>
-        </div>
-      </div>
-
-      {/* Video container */}
-      <div className="flex-1 relative overflow-hidden">
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center z-10">
-            <div className="text-white text-lg">Loading stream...</div>
-          </div>
-        )}
-
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75 z-10">
-            <div className="text-center">
-              <AlertCircle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
-              <p className="text-white text-lg">{error}</p>
-            </div>
-          </div>
-        )}
-
-        <div className="absolute inset-0 flex items-center justify-center">
-          {/* Display the video in fullscreen with zoom/pan */}
-          <div
-            className="max-w-full max-h-full flex items-center justify-center"
-            style={{
-              transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
-              transition: 'transform 0.2s ease-out',
-            }}
-          >
-            <video
-              ref={videoRef}
-              className="max-w-full max-h-full object-contain"
-              muted
-              playsInline
-              controls={false}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Control panel */}
       <div className="bg-gray-900 px-6 py-4 border-t border-gray-800">
         <div className="flex items-center justify-center gap-8">
           {/* Zoom controls */}
@@ -410,8 +351,7 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
           </div>
         </div>
       </div>
-    </div>
       )}
-    </>
+    </div>
   );
 };
