@@ -121,6 +121,28 @@ export const Matches: React.FC = () => {
   const [diskStatus, setDiskStatus] = useState<{ freeGb: number; percentUsed: number } | null>(null);
   const [sortOption, setSortOption] = useState<'date_desc' | 'date_asc' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'>('date_desc');
 
+  const sortedMatches = useMemo(() => {
+    const matchesCopy = [...matches];
+    matchesCopy.sort((a, b) => {
+      switch (sortOption) {
+        case 'date_asc':
+          return a.date - b.date;
+        case 'name_asc':
+          return a.id.localeCompare(b.id);
+        case 'name_desc':
+          return b.id.localeCompare(a.id);
+        case 'size_asc':
+          return a.total_size_mb - b.total_size_mb;
+        case 'size_desc':
+          return b.total_size_mb - a.total_size_mb;
+        case 'date_desc':
+        default:
+          return b.date - a.date;
+      }
+    });
+    return matchesCopy;
+  }, [matches, sortOption]);
+
   const loadMatches = async () => {
     try {
       const [recordingsResponse, healthResponse] = await Promise.all([
@@ -304,28 +326,6 @@ export const Matches: React.FC = () => {
   const currentSegments = segmentModal && segmentDetails
     ? segmentDetails[segmentModal.camera]
     : [];
-
-  const sortedMatches = useMemo(() => {
-    const matchesCopy = [...matches];
-    matchesCopy.sort((a, b) => {
-      switch (sortOption) {
-        case 'date_asc':
-          return a.date - b.date;
-        case 'name_asc':
-          return a.id.localeCompare(b.id);
-        case 'name_desc':
-          return b.id.localeCompare(a.id);
-        case 'size_asc':
-          return a.total_size_mb - b.total_size_mb;
-        case 'size_desc':
-          return b.total_size_mb - a.total_size_mb;
-        case 'date_desc':
-        default:
-          return b.date - a.date;
-      }
-    });
-    return matchesCopy;
-  }, [matches, sortOption]);
 
   return (
     <div className="p-4 md:p-6">
