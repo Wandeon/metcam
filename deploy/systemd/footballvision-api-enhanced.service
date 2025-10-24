@@ -1,0 +1,56 @@
+[Unit]
+Description=FootballVision Pro Enhanced API (Resilient)
+After=network-online.target
+Wants=network-online.target
+# Ensure we start after critical services
+After=systemd-resolved.service
+After=NetworkManager.service
+
+[Service]
+Type=simple
+User=mislav
+Group=mislav
+WorkingDirectory=/home/mislav/footballvision-pro
+
+# Environment setup
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/home/mislav/footballvision-pro/src"
+Environment="PYTHONUNBUFFERED=1"
+
+# Main service
+ExecStart=/usr/bin/python3 /home/mislav/footballvision-pro/src/platform/simple_api_enhanced.py
+
+# Pre-start actions
+ExecStartPre=/bin/bash -c 'mkdir -p /var/log/footballvision/{api,system,crashes}'
+ExecStartPre=/bin/bash -c 'nvpmodel -m 1'  # Ensure 25W mode
+ExecStartPre=/bin/bash -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor'
+
+# Post-start recovery check
+ExecStartPost=/bin/bash /home/mislav/footballvision-pro/scripts/power_loss_recovery.sh
+
+# Restart policy - aggressive but with backoff
+Restart=always
+RestartSec=10
+StartLimitInterval=300  # Reset failure count after 5 minutes
+StartLimitBurst=5       # Allow 5 restarts in that interval
+
+# Kill settings - graceful shutdown for recordings
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30  # Give time to stop recordings properly
+
+# Resource limits
+LimitNOFILE=65536  # Increase file descriptor limit
+Nice=-5            # Slight priority boost
+
+# Logging
+StandardOutput=append:/var/log/footballvision/api/service.log
+StandardError=append:/var/log/footballvision/api/error.log
+
+# Security (minimal restrictions for camera access)
+PrivateTmp=false
+ProtectHome=false
+ProtectSystem=false
+
+[Install]
+WantedBy=multi-user.target

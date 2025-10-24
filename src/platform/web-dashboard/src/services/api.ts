@@ -186,8 +186,8 @@ export const apiService = {
         recording: data.recording.recording,
         match_id: data.recording.match_id || undefined,
         duration_seconds: data.recording.duration,
-        cam0_running: data.recording.cameras?.camera_0?.state === 'PLAYING',
-        cam1_running: data.recording.cameras?.camera_1?.state === 'PLAYING',
+        cam0_running: (data.recording.cameras?.camera_0?.state === 'PLAYING' || data.recording.cameras?.camera_0?.state === 'running') || false,
+        cam1_running: (data.recording.cameras?.camera_1?.state === 'PLAYING' || data.recording.cameras?.camera_1?.state === 'running') || false,
       };
     } catch (error) {
       console.error('Failed to get status:', error);

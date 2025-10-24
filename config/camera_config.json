@@ -6,8 +6,8 @@
       "crop": {
         "left": 480,
         "right": 480,
-        "top": 270,
-        "bottom": 270
+        "top": 272,
+        "bottom": 272
       },
       "correction_type": "barrel",
       "correction_params": {
@@ -20,8 +20,8 @@
       "crop": {
         "left": 480,
         "right": 480,
-        "top": 270,
-        "bottom": 270
+        "top": 272,
+        "bottom": 272
       },
       "correction_type": "barrel",
       "correction_params": {
@@ -40,8 +40,8 @@
           "crop": {
             "left": 480,
             "right": 480,
-            "top": 270,
-            "bottom": 270
+            "top": 272,
+            "bottom": 272
           },
           "correction_type": "barrel",
           "correction_params": {
@@ -54,8 +54,8 @@
           "crop": {
             "left": 480,
             "right": 480,
-            "top": 270,
-            "bottom": 270
+            "top": 272,
+            "bottom": 272
           },
           "correction_type": "barrel",
           "correction_params": {

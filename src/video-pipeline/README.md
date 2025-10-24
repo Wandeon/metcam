@@ -1,38 +1,57 @@
-# Video Pipeline
+# Video Pipeline (v3)
 
-This directory mirrors the in-field configuration running on the Jetson Orin Nano rigs.
+This directory contains the in-process GStreamer pipeline implementation used by FootballVision Pro on Jetson Orin Nano devices.
 
-## Components
-- `recording_manager.py` – Python wrapper around the production shell script. Handles lifecycle and manifest creation.
-- `preview_service_optimized.py` – Optimised dual-camera HLS preview (720p @ 15 fps, tmpfs-backed segments).
-- `scripts/record_dual_1080p30_optimized.sh` – Production dual-camera recorder invoked by the API.
+## Key Modules
 
-## Architecture: Separated Preview & Recording
+- `gstreamer_manager.py` – Singleton that owns the GLib main loop, manages pipeline lifecycle, and propagates bus events.
+- `pipeline_builders.py` – Generates canonical recording and preview pipeline strings (NV12 → videocrop → I420 → x264).
+- `recording_service.py` – Dual-camera recorder with 10 s protection, state persistence, and timestamped MP4 segments.
+- `preview_service.py` – Dual-camera HLS preview (`/dev/shm/hls/cam{N}.m3u8`) with per-camera control and restart support.
+- `camera_config_manager.py` – Loads and atomically persists `config/camera_config.json` values.
+- `shaders/` – Reserved for future GPU-based distortion correction (not used by the v3 CPU crop pipeline).
 
-**IMPORTANT:** Preview and recording NEVER run simultaneously. This ensures maximum CPU efficiency and prevents resource contention.
+## Current Pipelines
 
-### Recording Flow
-1. API calls `RecordingManager.start_recording()`.
-2. API automatically stops `PreviewService` if running.
-3. The manager spawns `record_dual_1080p30_optimized.sh`, which starts two independent pipelines:
-   - `nvarguscamerasrc → nvvidconv (rotate + VIC/GPU crop) → x264enc (15 Mbps) → splitmuxsink`
-4. On stop, the manager signals the script, waits for segment finalisation, and writes an upload manifest.
+Both pipelines share the same deterministic crop and colorspace chain. The only differences are encoder bitrate/flags and the sink element.
 
-**Output:** `/mnt/recordings/<match_id>/segments/cam{0,1}_*.mkv` (5-minute segments)
+### Recording
 
-### Preview Flow
-1. API calls `PreviewService.start()`.
-2. Service launches two independent GStreamer pipelines:
-   - `nvarguscamerasrc (sensor-mode=0) → nvvidconv (VIC/GPU crop) → nvvidconv (NV12→I420 + scale) → x264enc (2 Mbps, ultrafast) → hlssink2`
-3. Segments are written to `/dev/shm/hls/cam{0,1}/` and synced to `/var/www/hls/cam{0,1}/playlist.m3u8`
+```
+nvarguscamerasrc (3840×2160 @ 30 fps NV12) →
+nvvidconv (NVMM → system memory) →
+videocrop (left=480, right=480, top=272, bottom=272) →
+videoconvert (NV12 → I420) →
+x264enc (12 Mbps, key-int=60, zerolatency) →
+h264parse (AVC stream-format) →
+splitmuxsink (10-minute MP4 segments: cam{N}_{timestamp}_%02d.mp4)
+```
 
-**Output:** HLS segments in `/var/www/hls/cam{0,1}/` (2-second segments, 10 files max, backed by tmpfs)
+### Preview
 
-**Note:** Preview refuses to start while recording is active (enforced by API layer).
+```
+nvarguscamerasrc (3840×2160 @ 30 fps NV12) →
+nvvidconv (NVMM → system memory) →
+videocrop (same trims as recording) →
+videoconvert (NV12 → I420) →
+x264enc (3 Mbps, byte-stream=true) →
+h264parse (config-interval=1) →
+hlssink2 (/dev/shm/hls/cam{N}.m3u8, 2 s segments)
+```
 
-## Requirements
-- `gst-launch-1.0`, NVIDIA `nvarguscamerasrc`, and Jetson multimedia stack.
-- `x264enc`, `h264parse`, `splitmuxsink`, `hlssink`/`hlssink2` plugins.
-- Jetson power tools: `nvpmodel`, `jetson_clocks`.
+## Runtime Behaviour
 
-The repository no longer ships the placeholder C++ GStreamer core; the shell + Python orchestration seen here is the source of truth.
+- Pipelines are created and started via `GStreamerManager` to avoid subprocess overhead.
+- Recording and preview cannot run simultaneously; the API stops preview automatically before recording starts.
+- Recording segments are written to `/mnt/recordings/<match>/segments/` and roll every 600 s.
+- Preview segments live in `/dev/shm/hls/` (tmpfs) and should be bind-mounted or symlinked to `/tmp/hls` for HTTP serving.
+
+## Development Tips
+
+- Use `GStreamerManager.list_pipelines()` from a Python shell to inspect active pipelines.
+- `pipeline_builders.py` should remain the single source of truth for crop values and encoder parameters; update docs alongside any changes.
+- When adding new configuration fields, extend `camera_config_manager.py` and expose them through the API/UI layers.
+
+## Legacy Files
+
+Legacy shell scripts and managers (`recording_manager_enhanced.py`, `record_dual_*`) remain in the repository for reference only. The v3 deployment no longer invokes them.

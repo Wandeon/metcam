@@ -1,672 +1,298 @@
-# FootballVision Pro - API Reference
+# FootballVision Pro – API Reference (v3)
 
-**API Version**: 2.0 (Enhanced)
-**Base URL**: `http://<device-ip>/api/v1`
-**Last Updated**: October 17, 2025
+The FootballVision Pro API v3 exposes an in-process control surface for recording, preview, and recordings management on Jetson Orin Nano devices. All endpoints return JSON and require the `Content-Type: application/json` header for POST requests.
 
----
+## Base URL
 
-## Table of Contents
-1. [Authentication](#authentication)
-2. [System Endpoints](#system-endpoints)
-3. [Recording Endpoints](#recording-endpoints)
-4. [Preview Endpoints](#preview-endpoints)
-5. [Mode Management](#mode-management)
-6. [Matches and Downloads](#matches-and-downloads)
-7. [Response Formats](#response-formats)
-8. [Error Codes](#error-codes)
+- Default: `http://<device-ip>:8000`
+- Local development: `http://localhost:8000`
+
+No authentication is enforced in the default deployment. Protect the service with network controls if exposed outside the local network.
 
 ---
 
-## Authentication
+## Status & Health
 
-Current implementation does not require authentication for local access. For production deployments with remote access, JWT authentication can be enabled via environment variables.
+### GET `/`
 
-**Future Authentication**:
-```http
-Authorization: Bearer <jwt-token>
-```
+Returns service metadata.
 
----
-
-## System Endpoints
-
-### GET /status
-
-Get overall system status including recording, preview, and mode information.
-
-**Request**:
-```http
-GET /api/v1/status
-```
-
-**Response** (200 OK):
 ```json
 {
-  "status": "idle",
-  "recording": false,
-  "mode": "normal",
-  "mode_description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling",
-  "recording_details": {
-    "status": "idle",
-    "recording": false,
-    "mode": "normal",
-    "mode_description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling"
+  "service": "FootballVision Pro API v3",
+  "version": "3.0.0",
+  "status": "running",
+  "features": [
+    "in_process_gstreamer",
+    "instant_operations",
+    "recording_protection",
+    "state_persistence",
+    "survives_page_refresh"
+  ]
+}
+```
+
+### GET `/api/v1/health`
+
+Summarises CPU, memory, and storage usage.
+
+```json
+{
+  "status": "healthy",
+  "system": {
+    "cpu_percent": 18.2,
+    "memory_percent": 42.5,
+    "memory_available_gb": 3.12,
+    "disk_free_gb": 215.77,
+    "disk_percent": 28.4
+  }
+}
+```
+
+### GET `/api/v1/status`
+
+Aggregates recording and preview state.
+
+```json
+{
+  "recording": {
+    "recording": true,
+    "match_id": "match_20250115_123456",
+    "duration": 37.4,
+    "cameras": {
+      "camera_0": {
+        "state": "running",
+        "uptime": 37.2
+      },
+      "camera_1": {
+        "state": "running",
+        "uptime": 37.2
+      }
+    },
+    "protected": false
   },
   "preview": {
-    "status": "idle",
-    "streaming": false,
-    "mode": "normal",
-    "mode_description": "Standard preview with cropping (720p @ 15fps)"
-  },
-  "modes": {
-    "recording": {
-      "mode": "normal",
-      "description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling",
-      "available_modes": [
-        {
-          "mode": "normal",
-          "description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling"
-        },
-        {
-          "mode": "no_crop",
-          "description": "Raw sensor output without transformations (for setup)"
-        },
-        {
-          "mode": "optimized",
-          "description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling"
-        }
-      ]
-    },
-    "preview": {
-      "mode": "normal",
-      "description": "Standard preview with cropping (720p @ 15fps)",
-      "available_modes": [
-        {
-          "mode": "normal",
-          "description": "Standard preview with cropping (720p @ 15fps)"
-        },
-        {
-          "mode": "no_crop",
-          "description": "Raw sensor output without transformations (for setup)"
-        },
-        {
-          "mode": "calibration",
-          "description": "Center 50% crop (25% FOV) at 30fps - native 4K sharpness"
-        }
-      ]
+    "preview_active": false,
+    "cameras": {
+      "camera_0": {
+        "active": false,
+        "state": "stopped",
+        "uptime": 0.0,
+        "hls_url": "/hls/cam0.m3u8"
+      },
+      "camera_1": {
+        "active": false,
+        "state": "stopped",
+        "uptime": 0.0,
+        "hls_url": "/hls/cam1.m3u8"
+      }
     }
   }
 }
 ```
 
-**Response During Recording** (200 OK):
-```json
-{
-  "status": "recording",
-  "recording": true,
-  "match_id": "match_20251017_001",
-  "started_at": "2025-10-17T14:30:00.123Z",
-  "duration_seconds": 125.45,
-  "cam0_running": true,
-  "cam1_running": true,
-  "mode": "normal",
-  "mode_description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling",
-  "recording_details": { ... },
-  "preview": { ... },
-  "modes": { ... }
-}
-```
-
-**Notes**:
-- Top-level fields provide backward compatibility with UI
-- Nested `recording_details` provides full recording status
-- Use `status === 'recording'` or `recording === true` to detect active recording
-- Poll this endpoint every 1-2 seconds for real-time status updates
-
-### GET /health
-
-Basic health check endpoint for monitoring.
-
-**Request**:
-```http
-GET /api/v1/health
-```
-
-**Response** (200 OK):
-```json
-{
-  "status": "ok"
-}
-```
-
 ---
 
-## Recording Endpoints
+## Recording
 
-### POST /recording
+### GET `/api/v1/recording`
 
-Start a new recording session.
+Returns the same payload as the `recording` section of `/api/v1/status`.
 
-**Request**:
-```http
-POST /api/v1/recording
-Content-Type: application/json
+### POST `/api/v1/recording`
 
-{
-  "match_id": "match_20251017_001",
-  "mode": "normal"
-}
-```
+Start dual-camera recording. Preview is automatically stopped beforehand.
 
-**Request Body Parameters**:
+**Request Body**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `match_id` | string | Yes | Unique identifier for the recording |
-| `mode` | string | No | Recording mode: "normal", "no_crop", or "optimized" (default: "normal") |
+| Field     | Type    | Default | Description                                  |
+|-----------|---------|---------|----------------------------------------------|
+| match_id  | string  | auto    | Optional explicit match identifier           |
+| force     | boolean | `false` | Force restart if a recording is already live |
 
-**Response** (200 OK):
-```json
-{
-  "status": "recording",
-  "recording": true,
-  "match_id": "match_20251017_001",
-  "started_at": "2025-10-17T14:30:00.123456Z",
-  "cam0_pid": 12345,
-  "cam1_pid": 12346,
-  "cam0_running": true,
-  "cam1_running": true,
-  "mode": "normal",
-  "mode_description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling"
-}
-```
-
-**Error Responses**:
-
-- **400 Bad Request**: Invalid parameters or recording already active
-  ```json
-  {
-    "detail": "Recording already active"
-  }
-  ```
-
-- **400 Bad Request**: Preview streaming must be stopped first
-  ```json
-  {
-    "detail": "Preview is active, stop preview before recording"
-  }
-  ```
-
-**Recording Modes**:
-
-| Mode | Resolution | FPS | FOV | Bitrate | Use Case |
-|------|------------|-----|-----|---------|----------|
-| `normal` | 2880×1620 | 25 | 56% | 18 Mbps | Default match recording |
-| `no_crop` | 1920×1080 | 30 | 100% | 15 Mbps | Camera setup/alignment |
-| `optimized` | 2880×1620 | 25 | 56% | 18 Mbps | Alias for normal |
-
-**Example Usage**:
+**Example**
 
 ```bash
-# Start recording in normal mode (default)
-curl -X POST http://localhost/api/v1/recording \
+curl -X POST http://localhost:8000/api/v1/recording \
   -H 'Content-Type: application/json' \
-  -d '{"match_id":"match_001"}'
+  -d '{"match_id":"match_20250115_123456"}'
+```
 
-# Start recording in no-crop mode for camera setup
-curl -X POST http://localhost/api/v1/recording \
+**Success Response**
+
+```json
+{
+  "success": true,
+  "message": "Recording started for match: match_20250115_123456",
+  "match_id": "match_20250115_123456",
+  "cameras_started": [0, 1],
+  "cameras_failed": []
+}
+```
+
+### DELETE `/api/v1/recording`
+
+Stops recording. Use the `force` query parameter to override the 10‑second protection window.
+
+```bash
+curl -X DELETE 'http://localhost:8000/api/v1/recording?force=false'
+```
+
+**Protected Response Example**
+
+```json
+{
+  "success": false,
+  "message": "Recording protected for 10.0s. Current duration: 5.2s. Use force=True to override.",
+  "protected": true
+}
+```
+
+**Success Response**
+
+```json
+{
+  "success": true,
+  "message": "Recording stopped successfully"
+}
+```
+
+---
+
+## Preview
+
+### GET `/api/v1/preview`
+
+Returns the same payload as the `preview` section of `/api/v1/status`.
+
+### POST `/api/v1/preview`
+
+Starts the HLS preview pipelines. Preview is blocked while recording is active.
+
+**Request Body**
+
+| Field     | Type | Default | Description                              |
+|-----------|------|---------|------------------------------------------|
+| camera_id | int  | `null`  | Start a specific camera (0 or 1); omit to start both |
+
+```bash
+curl -X POST http://localhost:8000/api/v1/preview \
   -H 'Content-Type: application/json' \
-  -d '{"match_id":"setup_test", "mode":"no_crop"}'
+  -d '{}'
 ```
 
-### DELETE /recording
+**Response**
 
-Stop the active recording session.
-
-**Request**:
-```http
-DELETE /api/v1/recording
-```
-
-**Response** (200 OK):
 ```json
 {
-  "status": "idle",
-  "recording": false,
-  "match_id": "match_20251017_001",
-  "duration_seconds": 5425.67,
-  "stopped_at": "2025-10-17T16:00:25.789Z"
+  "success": true,
+  "message": "Preview started for cameras: [0, 1]",
+  "cameras_started": [0, 1],
+  "cameras_failed": []
 }
 ```
 
-**Error Responses**:
+### DELETE `/api/v1/preview`
 
-- **400 Bad Request**: No active recording
-  ```json
-  {
-    "detail": "No recording active"
-  }
-  ```
+Stops preview for one or both cameras.
 
-### GET /recording
-
-Get current recording status (alias for /status with recording details).
-
-**Request**:
-```http
-GET /api/v1/recording
+```bash
+curl -X DELETE 'http://localhost:8000/api/v1/preview?camera_id=0'
 ```
 
-**Response**: Same as `GET /status` but focused on recording details.
-
----
-
-## Preview Endpoints
-
-### POST /preview/start
-
-Start the preview stream (HLS output for web viewing).
-
-**Request**:
-```http
-POST /api/v1/preview/start
-Content-Type: application/json
-
-{
-  "mode": "normal"
-}
-```
-
-**Request Body Parameters**:
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `mode` | string | No | Preview mode: "normal", "no_crop", or "calibration" (default: "normal") |
-
-**Response** (200 OK):
 ```json
 {
-  "status": "streaming",
-  "streaming": true,
-  "mode": "normal",
-  "mode_description": "Standard preview with cropping (720p @ 15fps)",
-  "cam0_running": true,
-  "cam1_running": true,
-  "hls_urls": {
-    "cam0": "http://<device-ip>/hls/cam0/stream.m3u8",
-    "cam1": "http://<device-ip>/hls/cam1/stream.m3u8"
-  }
+  "success": true,
+  "message": "Preview stopped for cameras: [0]",
+  "cameras_stopped": [0],
+  "cameras_failed": []
 }
 ```
 
-**Preview Modes**:
+### POST `/api/v1/preview/restart`
 
-| Mode | Resolution | FPS | FOV | Bitrate | Use Case |
-|------|------------|-----|-----|---------|----------|
-| `normal` | 1280×720 | 15 | 50% | 2 Mbps | Standard web preview |
-| `no_crop` | 1920×1080 | 15 | 100% | 3 Mbps | Full FOV preview |
-| `calibration` | 1920×1080 | 30 | 25% | 8 Mbps | High-quality center crop for focus calibration |
+Stops and restarts preview in a single call.
 
-**Error Responses**:
-
-- **400 Bad Request**: Recording is active
-  ```json
-  {
-    "detail": "Cannot start preview while recording is active"
-  }
-  ```
-
-### POST /preview/stop
-
-Stop the preview stream.
-
-**Request**:
-```http
-POST /api/v1/preview/stop
-```
-
-**Response** (200 OK):
-```json
-{
-  "status": "idle",
-  "streaming": false
-}
-```
-
-### GET /preview/status
-
-Get current preview status.
-
-**Request**:
-```http
-GET /api/v1/preview/status
-```
-
-**Response** (200 OK):
-```json
-{
-  "status": "streaming",
-  "streaming": true,
-  "mode": "normal",
-  "mode_description": "Standard preview with cropping (720p @ 15fps)"
-}
+```bash
+curl -X POST http://localhost:8000/api/v1/preview/restart \
+  -H 'Content-Type: application/json' \
+  -d '{"camera_id": null}'
 ```
 
 ---
 
-## Mode Management
+## Recordings Management
 
-### GET /modes
+### GET `/api/v1/recordings`
 
-Get available modes for recording and preview.
+Lists available recordings under `/mnt/recordings`.
 
-**Request**:
-```http
-GET /api/v1/modes
-```
-
-**Response** (200 OK):
-```json
-{
-  "recording": {
-    "mode": "normal",
-    "description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling",
-    "available_modes": [
-      {
-        "mode": "normal",
-        "description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling"
-      },
-      {
-        "mode": "no_crop",
-        "description": "Raw sensor output without transformations (for setup)"
-      },
-      {
-        "mode": "optimized",
-        "description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling"
-      }
-    ]
-  },
-  "preview": {
-    "mode": "normal",
-    "description": "Standard preview with cropping (720p @ 15fps)",
-    "available_modes": [
-      {
-        "mode": "normal",
-        "description": "Standard preview with cropping (720p @ 15fps)"
-      },
-      {
-        "mode": "no_crop",
-        "description": "Raw sensor output without transformations (for setup)"
-      },
-      {
-        "mode": "calibration",
-        "description": "Center 50% crop (25% FOV) at 30fps - native 4K sharpness"
-      }
-    ]
-  }
-}
-```
-
-### POST /modes/recording
-
-Set the default recording mode (persists for future recordings).
-
-**Request**:
-```http
-POST /api/v1/modes/recording
-Content-Type: application/json
-
-{
-  "mode": "normal"
-}
-```
-
-**Response** (200 OK):
-```json
-{
-  "mode": "normal",
-  "description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling"
-}
-```
-
-### POST /modes/preview
-
-Set the default preview mode (persists for future preview sessions).
-
-**Request**:
-```http
-POST /api/v1/modes/preview
-Content-Type: application/json
-
-{
-  "mode": "calibration"
-}
-```
-
-**Response** (200 OK):
-```json
-{
-  "mode": "calibration",
-  "description": "Center 50% crop (25% FOV) at 30fps - native 4K sharpness"
-}
-```
-
----
-
-## Matches and Downloads
-
-### GET /recordings
-
-List all available recordings with segment information.
-
-**Request**:
-```http
-GET /api/v1/recordings
-```
-
-**Response** (200 OK):
 ```json
 {
   "recordings": {
-    "match_20251017_001": [
+    "match_20250115_123456": [
       {
-        "file": "match_20251017_001/segments/cam0_00000.mkv",
-        "filename": "match_20251017_001_cam0",
-        "size_mb": 645.2,
-        "created_at": 1697552000.123,
-        "segment_count": 18,
-        "type": "segmented"
+        "file": "cam0_20250115_123456_00.mp4",
+        "size_mb": 1126.42,
+        "path": "/mnt/recordings/match_20250115_123456/segments/cam0_20250115_123456_00.mp4"
       },
       {
-        "file": "match_20251017_001/segments/cam1_00000.mkv",
-        "filename": "match_20251017_001_cam1",
-        "size_mb": 640.8,
-        "created_at": 1697552000.456,
-        "segment_count": 18,
-        "type": "segmented"
-      }
-    ],
-    "match_20251016_003": [
-      {
-        "file": "match_20251016_003_cam0.mp4",
-        "size_mb": 12150.5,
-        "created_at": 1697465600.789
-      },
-      {
-        "file": "match_20251016_003_cam1.mp4",
-        "size_mb": 12080.3,
-        "created_at": 1697465601.012
+        "file": "cam1_20250115_123456_00.mp4",
+        "size_mb": 1119.87,
+        "path": "/mnt/recordings/match_20250115_123456/segments/cam1_20250115_123456_00.mp4"
       }
     ]
   }
 }
 ```
 
-**Response Fields**:
+### GET `/api/v1/recordings/{match_id}/segments`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `recordings` | object | Map of match_id to array of recording files |
-| `file` | string | Relative path to recording file |
-| `filename` | string | Display name for the recording |
-| `size_mb` | number | Total file size in megabytes |
-| `created_at` | number | Unix timestamp of creation |
-| `segment_count` | number | Number of segments (for segmented recordings) |
-| `type` | string | "segmented" or omitted for merged files |
+Returns segment metadata for a specific match (files are sorted in order).
 
----
+### DELETE `/api/v1/recordings/{match_id}`
 
-## Response Formats
-
-### Recording Status Object
-
-```typescript
-interface RecordingStatus {
-  status: 'idle' | 'recording';
-  recording: boolean;
-  match_id?: string;
-  started_at?: string;  // ISO 8601 timestamp
-  duration_seconds?: number;
-  cam0_running?: boolean;
-  cam1_running?: boolean;
-  cam0_pid?: number;
-  cam1_pid?: number;
-  mode?: string;
-  mode_description?: string;
-}
-```
-
-### Preview Status Object
-
-```typescript
-interface PreviewStatus {
-  status: 'idle' | 'streaming';
-  streaming: boolean;
-  mode?: string;
-  mode_description?: string;
-  cam0_running?: boolean;
-  cam1_running?: boolean;
-  hls_urls?: {
-    cam0: string;
-    cam1: string;
-  };
-}
-```
-
-### Mode Object
-
-```typescript
-interface Mode {
-  mode: string;
-  description: string;
-  available_modes: Array<{
-    mode: string;
-    description: string;
-  }>;
-}
-```
-
----
-
-## Error Codes
-
-All errors follow FastAPI standard error format:
+Removes the entire recording directory and reports reclaimed space.
 
 ```json
 {
-  "detail": "Error message describing the issue"
+  "status": "deleted",
+  "match_id": "match_20250115_123456",
+  "files_deleted": 6,
+  "size_mb_freed": 6758.21
 }
 ```
 
-### HTTP Status Codes
+### GET `/api/v1/recordings/{match_id}/download`
 
-| Code | Meaning | Common Causes |
-|------|---------|---------------|
-| 200 | OK | Request successful |
-| 400 | Bad Request | Invalid parameters, conflicting state (e.g., recording already active) |
-| 404 | Not Found | Endpoint or resource not found |
-| 500 | Internal Server Error | Server-side error (check logs) |
-
-### Common Error Messages
-
-| Message | Cause | Solution |
-|---------|-------|----------|
-| "Recording already active" | Attempted to start recording while one is running | Stop current recording first |
-| "No recording active" | Attempted to stop recording when none is running | Check status before stopping |
-| "Cannot start preview while recording is active" | Attempted preview during recording | Stop recording first |
-| "Preview is active, stop preview before recording" | Attempted recording during preview | Stop preview first |
-| "Invalid mode: xyz" | Specified mode doesn't exist | Use /modes to check available modes |
+Streams a ZIP archive containing all files for the match.
 
 ---
 
-## Usage Examples
+## Error Format
 
-### Complete Recording Workflow
+All errors use the standard FastAPI schema:
 
-```bash
-# 1. Check system status
-curl http://localhost/api/v1/status | python3 -m json.tool
-
-# 2. Ensure 25W power mode
-sudo nvpmodel -m 1
-
-# 3. Start recording
-curl -X POST http://localhost/api/v1/recording \
-  -H 'Content-Type: application/json' \
-  -d '{"match_id":"match_20251017_001"}'
-
-# 4. Monitor status (poll during recording)
-watch -n 2 'curl -s http://localhost/api/v1/status | python3 -m json.tool'
-
-# 5. Stop recording after match
-curl -X DELETE http://localhost/api/v1/recording
-
-# 6. List recordings
-curl http://localhost/api/v1/recordings | python3 -m json.tool
+```json
+{
+  "detail": "Human-readable error message"
+}
 ```
 
-### Preview Stream Workflow
+Common situations:
 
-```bash
-# 1. Start preview in calibration mode
-curl -X POST http://localhost/api/v1/preview/start \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"calibration"}'
-
-# 2. Access streams in browser
-# Camera 0: http://<device-ip>/hls/cam0/stream.m3u8
-# Camera 1: http://<device-ip>/hls/cam1/stream.m3u8
-
-# 3. Stop preview when done
-curl -X POST http://localhost/api/v1/preview/stop
-```
+| Message                                              | Cause                                             |
+|------------------------------------------------------|---------------------------------------------------|
+| `Recording protected for 10.0s...`                   | Stop requested during protection window           |
+| `Already recording match: <id>`                      | Second start attempted without `force=true`       |
+| `Recording is active. Stop recording before starting preview.` | Preview requested while recording is running |
+| `Preview start rejected: recording is active`        | Same as above                                     |
+| `Recording <id> not found`                           | Requested match directory does not exist          |
 
 ---
 
-## Prometheus Metrics
+## Notes
 
-The API exposes Prometheus metrics at `/metrics`:
-
-```http
-GET /metrics
-```
-
-**Available Metrics**:
-- `api_requests_total{endpoint, method}` - Total API requests counter
-- `recording_active` - Gauge: 1 if recording, 0 if idle
-- `preview_active` - Gauge: 1 if streaming, 0 if idle
-
----
-
-## Related Documentation
-
-- **[Recording Pipeline Technical Reference](./RECORDING_PIPELINE.md)** - Complete pipeline details
-- **[Deployment Guide](../DEPLOYMENT_GUIDE.md)** - Installation and setup
-- **[Troubleshooting Guide](../user/TROUBLESHOOTING.md)** - Common issues
-
----
-
-**Document Version**: 2.0
-**Last Updated**: October 17, 2025
-**Compatible with**: FootballVision Pro Enhanced API (simple_api_enhanced.py)
+- Recording and preview pipelines share the same crop and color pipeline; preview streams are available at `/hls/cam0.m3u8` and `/hls/cam1.m3u8`.
+- API v3 removed mode-switching endpoints (`/modes`, `mode` request fields). Field-of-view adjustments are now handled exclusively through the camera configuration endpoints/UI.
+- All recording segments are MP4 files produced every 10 minutes with timestamped filenames.

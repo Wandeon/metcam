@@ -17,7 +17,7 @@ cd footballvision-pro
 ```
 
 ## 3. Install Dependencies and Services
-Run the bundled installer; it configures GStreamer, creates directories, and installs the `footballvision-api` service.
+Run the bundled installer; it configures GStreamer, creates directories, and installs the `footballvision-api-enhanced` service.
 
 ```bash
 cd deploy
@@ -65,13 +65,29 @@ curl http://localhost:8000/api/v1/status | python3 -m json.tool
 Expected response:
 ```json
 {
-  "status": "idle",
-  "recording": false,
-  "mode": "normal",
-  "mode_description": "Native 4K recording - 2880×1620 @ 25fps, 56% FOV, no downscaling",
-  "recording_details": { ... },
-  "preview": { ... },
-  "modes": { ... }
+  "recording": {
+    "recording": false,
+    "match_id": null,
+    "duration": 0.0,
+    "cameras": {}
+  },
+  "preview": {
+    "preview_active": false,
+    "cameras": {
+      "camera_0": {
+        "active": false,
+        "state": "stopped",
+        "uptime": 0.0,
+        "hls_url": "/hls/cam0.m3u8"
+      },
+      "camera_1": {
+        "active": false,
+        "state": "stopped",
+        "uptime": 0.0,
+        "hls_url": "/hls/cam1.m3u8"
+      }
+    }
+  }
 }
 ```
 
@@ -79,23 +95,23 @@ Expected response:
 
 ### Test Preview Stream
 
-**Start preview** (1280×720 @ 15 fps):
+**Start preview** (2880×1616 @ 30 fps, 3 Mbps):
 ```bash
-curl -X POST http://localhost:8000/api/v1/preview/start \
+curl -X POST http://localhost:8000/api/v1/preview \
   -H 'Content-Type: application/json' \
-  -d '{"mode": "normal"}'
+  -d '{}'
 ```
 
-Confirm `.ts` segments appear under `/var/www/hls/cam0/` and `/var/www/hls/cam1/` (720p, ~2 Mbps).
+Confirm `.ts` segments appear under `/dev/shm/hls/` (tmpfs). If the API is serving `/hls/*`, ensure `/dev/shm/hls` is bind-mounted or symlinked to `/tmp/hls`.
 
 **Stop preview**:
 ```bash
-curl -X POST http://localhost:8000/api/v1/preview/stop
+curl -X DELETE http://localhost:8000/api/v1/preview
 ```
 
 ### Test Native 4K Recording
 
-**Start recording** (Native 4K: 2880×1620 @ 25 fps):
+**Start recording** (Native 4K: 2880×1616 @ 25 fps):
 ```bash
 curl -X POST http://localhost:8000/api/v1/recording \
   -H 'Content-Type: application/json' \
@@ -103,12 +119,12 @@ curl -X POST http://localhost:8000/api/v1/recording \
 ```
 
 **Expected Behavior**:
-- Recording starts in "normal" mode (Native 4K pipeline)
-- Resolution: 2880×1620 (56% FOV, center crop from 4K sensor)
+- Recording starts using the optimized in-process pipeline
+- Resolution: 2880×1616 (56% FOV, trim-based crop from 4K sensor)
 - Framerate: 25 fps (steady, no drops)
 - Bitrate: 18 Mbps per camera
 - CPU usage: ~88% (166% on cores 0-2, 162% on cores 3-5)
-- Segment files created every 5 minutes
+- Segment files created every 10 minutes (timestamped MP4s)
 
 **Monitor recording** (optional):
 ```bash
@@ -133,39 +149,26 @@ ls -lh /mnt/recordings/test_match/segments/
 ```
 
 **Expected Output**:
-- MKV segments: `cam0_00000.mkv`, `cam1_00000.mkv`
-- Segment size: ~135 MB per camera per minute
-- File format: Matroska (MKV) with H.264 video
+- MP4 segments: `cam0_<timestamp>_00.mp4`, `cam1_<timestamp>_00.mp4`
+- Segment size: ~1.1 GB every 10 minutes (~110 MB/minute per camera)
+- Container: MP4 (H.264 video stream)
 
-**Verify framerate and resolution**:
+**Verify framerate and resolution** (replace `<timestamp>` with the generated value):
 ```bash
 ffprobe -v error -select_streams v:0 \
   -show_entries stream=width,height,avg_frame_rate,nb_frames \
-  /mnt/recordings/test_match/segments/cam0_00000.mkv
+  /mnt/recordings/test_match/segments/cam0_20250101_123000_00.mp4
 ```
 
-Expected for 30-second recording:
+Expected for a 30-second test segment:
 - Width: 2880
-- Height: 1620
+- Height: 1616
 - FPS: 25/1
 - Frames: ~750
 
 ### Recording Modes
 
-The system supports multiple recording modes:
-
-| Mode | Resolution | FPS | FOV | Bitrate | Use Case |
-|------|------------|-----|-----|---------|----------|
-| **normal** (default) | 2880×1620 | 25 | 56% | 18 Mbps | Match-day recording |
-| **no_crop** | 1920×1080 | 30 | 100% | 15 Mbps | Camera setup/alignment |
-| **optimized** | 2880×1620 | 25 | 56% | 18 Mbps | Alias for normal |
-
-To test a specific mode:
-```bash
-curl -X POST http://localhost:8000/api/v1/recording \
-  -H 'Content-Type: application/json' \
-  -d '{"match_id":"setup_test", "mode":"no_crop"}'
-```
+API v3 runs a single optimized crop pipeline. Mode-switching endpoints from earlier releases have been removed, and the `POST /api/v1/recording` endpoint ignores any legacy `mode` parameters. Adjustments to the field of view should be made through the camera configuration system instead.
 
 ### Performance Validation
 
@@ -186,8 +189,9 @@ cat /sys/class/thermal/thermal_zone*/temp
 # Verify framerate from actual recording
 ffprobe -v error -count_frames -select_streams v:0 \
   -show_entries stream=nb_read_frames,avg_frame_rate \
-  /mnt/recordings/test_match/segments/cam0_00000.mkv
-# Should show: 25/1 fps, ~750 frames for 30s recording
+  /mnt/recordings/test_match/segments/cam0_20250101_123000_00.mp4
+# Should show: 25/1 fps, ~750 frames for a 30s sample
+# Replace the timestamp with the actual filename produced during your test
 ```
 
 ### Web UI Validation
@@ -201,7 +205,7 @@ ffprobe -v error -count_frames -select_streams v:0 \
 1. Navigate to **Matches** tab
 2. Verify "test_match" appears with:
    - Both camera segments listed
-   - Correct file sizes (~135 MB)
+   - Correct file sizes (~1.1 GB per 10-minute segment)
    - Download links functional
 
 **Test Preview Mode**:
@@ -247,8 +251,10 @@ systemctl status footballvision-api-enhanced
 
 **Cleanup**:
 ```bash
-# Clear preview cache
-sudo rm -rf /var/www/hls/*
+# Clear preview cache (tmpfs)
+sudo rm -rf /dev/shm/hls/*
+# If /hls is served from /tmp/hls, clear that mirror as well
+sudo rm -rf /tmp/hls/*
 
 # Remove specific match
 sudo rm -rf /mnt/recordings/<match_id>
@@ -367,4 +373,4 @@ The device is now ready for match-day operation with the native 4K recording pip
 
 **Document Version**: 2.0
 **Last Updated**: October 17, 2025
-**Pipeline**: Native 4K @ 25fps (2880×1620, 56% FOV)
+**Pipeline**: Native 4K @ 25fps (2880×1616, 56% FOV)

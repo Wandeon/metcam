@@ -6,11 +6,12 @@ Uses in-process GStreamer for instant, reliable HLS preview
 
 import os
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
 from threading import Lock
 
-from gstreamer_manager import GStreamerManager
+from gstreamer_manager import GStreamerManager, PipelineState
 from pipeline_builders import build_preview_pipeline
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ class PreviewService:
     - Survives page refreshes
     """
     
-    def __init__(self, hls_base_dir: str = "/tmp/hls"):
+    def __init__(self, hls_base_dir: str = "/dev/shm/hls"):
         self.hls_base_dir = Path(hls_base_dir)
         self.hls_base_dir.mkdir(parents=True, exist_ok=True)
         
@@ -40,21 +41,27 @@ class PreviewService:
     def get_status(self) -> Dict:
         """Get current preview status"""
         with self.state_lock:
-            cameras = {}
-            
+            cameras: Dict[str, Dict] = {}
+
             for cam_id in self.camera_ids:
                 pipeline_name = f'preview_cam{cam_id}'
                 info = self.gst_manager.get_pipeline_status(pipeline_name)
-                
+
+                active = bool(info and info.state == PipelineState.RUNNING)
+                uptime = 0.0
+                if info and info.start_time:
+                    uptime = (datetime.utcnow() - info.start_time).total_seconds()
+
                 cameras[f'camera_{cam_id}'] = {
-                    'active': info is not None,
-                    'state': info['state'] if info else 'stopped',
-                    'uptime': info['uptime'] if info else 0.0,
+                    'active': active,
+                    'state': info.state.value if info else 'stopped',
+                    'uptime': uptime,
                     'hls_url': f'/hls/cam{cam_id}.m3u8'
                 }
-            
+                self.preview_active[cam_id] = active
+
             return {
-                'preview_active': any(info['active'] for info in cameras.values()),
+                'preview_active': any(cam['active'] for cam in cameras.values()),
                 'cameras': cameras
             }
     
@@ -81,10 +88,16 @@ class PreviewService:
                 
                 # Check if already running
                 pipeline_name = f'preview_cam{cam_id}'
-                if self.gst_manager.get_pipeline_status(pipeline_name):
+                status = self.gst_manager.get_pipeline_status(pipeline_name)
+                if status and status.state == PipelineState.RUNNING:
                     logger.info(f"Preview camera {cam_id} already running")
                     started_cameras.append(cam_id)
                     continue
+
+                # If pipeline exists but not running, remove it first
+                if status:
+                    logger.info(f"Preview camera {cam_id} exists but not running (state={status.state.value}), removing")
+                    self.gst_manager.remove_pipeline(pipeline_name)
                 
                 try:
                     # Build HLS location
@@ -100,7 +113,7 @@ class PreviewService:
                     def on_error(name, error, debug, metadata):
                         logger.error(f"Preview pipeline {name} error: {error}, debug: {debug}")
                     
-                    self.gst_manager.create_pipeline(
+                    created = self.gst_manager.create_pipeline(
                         name=pipeline_name,
                         pipeline_description=pipeline_str,
                         on_eos=on_eos,
@@ -108,8 +121,18 @@ class PreviewService:
                         metadata={'camera_id': cam_id}
                     )
                     
+                    if not created:
+                        logger.error(f"Failed to create preview pipeline for camera {cam_id}")
+                        failed_cameras.append(cam_id)
+                        continue
+
                     # Start pipeline
-                    self.gst_manager.start_pipeline(pipeline_name)
+                    started = self.gst_manager.start_pipeline(pipeline_name)
+                    if not started:
+                        logger.error(f"Failed to start preview pipeline for camera {cam_id}")
+                        self.gst_manager.remove_pipeline(pipeline_name)
+                        failed_cameras.append(cam_id)
+                        continue
                     
                     self.preview_active[cam_id] = True
                     started_cameras.append(cam_id)
@@ -158,8 +181,12 @@ class PreviewService:
                 
                 try:
                     # Stop pipeline (graceful with EOS)
-                    self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=True, timeout=3.0)
-                    
+                    stopped = self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=True, timeout=3.0)
+                    if not stopped:
+                        logger.warning(f"Preview pipeline {pipeline_name} stop request returned False")
+                        failed_cameras.append(cam_id)
+                        continue
+
                     self.preview_active[cam_id] = False
                     stopped_cameras.append(cam_id)
                     logger.info(f"Preview camera {cam_id} stopped")

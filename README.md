@@ -11,7 +11,7 @@ Professional dual-camera recording system for football matches on NVIDIA Jetson 
 
 **Features:**
 - Dual-camera synchronized recording
-- VIC GPU hardware crop (2880x1620 output)
+- Deterministic crop pipeline (NV12 → videocrop → I420) with 2880x1616 output
 - In-process GStreamer pipelines
 - 10-second recording protection
 - State persistence across restarts
@@ -43,11 +43,11 @@ curl http://localhost:8000/api/v1/status | python3 -m json.tool
 
 ### Recording Pipeline (Per Camera)
 ```
-nvarguscamerasrc (4K@30fps)
+nvarguscamerasrc (4K@30fps NV12)
   ↓
-nvvidconv (VIC GPU crop → 2880x1620)
+nvvidconv (NVMM → system memory, no crop)
   ↓
-nvvidconv (format conversion)
+videocrop (CPU trim to 2880x1616)
   ↓
 videoconvert (NV12 → I420)
   ↓

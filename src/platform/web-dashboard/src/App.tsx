@@ -9,7 +9,7 @@ import { MatchesEnhanced as Matches } from '@/pages/MatchesEnhanced';
 import { Preview } from '@/pages/Preview';
 import { ActivityLog } from '@/pages/ActivityLog';
 import { Login } from '@/pages/Login';
-import { Video, Home, Film, Eye, Settings, LogOut, Menu, X, Activity } from 'lucide-react';
+import { Video, Home, Film, Eye, LogOut, Menu, X, Activity } from 'lucide-react';
 
 function App() {
   const isAuthenticated = !!localStorage.getItem('access_token');
@@ -91,12 +91,6 @@ function App() {
                 label="Activity Log"
                 onClick={() => setSidebarOpen(false)}
               />
-              <NavLink
-                to="/settings"
-                icon={<Settings />}
-                label="Settings"
-                onClick={() => setSidebarOpen(false)}
-              />
             </nav>
           </div>
 
@@ -121,7 +115,6 @@ function App() {
             <Route path="/preview" element={<Preview />} />
             <Route path="/matches" element={<Matches />} />
             <Route path="/activity" element={<ActivityLog />} />
-            <Route path="/settings" element={<div className="p-6">Settings (Coming Soon)</div>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

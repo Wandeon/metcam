@@ -76,7 +76,7 @@ Successfully redesigned FootballVision Pro from **subprocess-based scripts** to 
      - Per-camera control
      - Restart capability
      - Independent from recording
-     - HLS output to `/tmp/hls/`
+     - HLS segments in `/dev/shm/hls/` (served via `/hls/cam{N}.m3u8`)
 
 5. **simple_api_v3.py** (12KB)
    - Location: `/home/mislav/footballvision-pro/src/platform/`
@@ -219,16 +219,16 @@ POST /api/v1/preview/restart
 ```
 nvarguscamerasrc
   ↓ 4K @ 30fps (NV12, NVMM)
-nvvidconv (VIC crop)
-  ↓ 2880x1620 @ 30fps (NV12, NVMM) - edge coordinates
-nvvidconv (format conversion)
-  ↓ 2880x1620 @ 30fps (NV12, system memory)
+nvvidconv (NVMM → system memory, no crop)
+  ↓ 3840x2160 @ 30fps (NV12, system memory)
+videocrop (CPU trim to match config)
+  ↓ ~2880x1616 @ 30fps (NV12, system memory)
 videoconvert
-  ↓ 2880x1620 @ 30fps (I420)
+  ↓ ~2880x1616 @ 30fps (I420)
 x264enc (12 Mbps, threads=6)
   ↓ H.264
 splitmuxsink
-  → /mnt/recordings/{match_id}/segments/cam{id}_%05d.mkv (10 min chunks)
+  → /mnt/recordings/{match_id}/segments/cam{id}_{timestamp}_%02d.mp4 (10 min chunks)
 ```
 
 ### Preview Pipeline (per camera)
@@ -236,16 +236,16 @@ splitmuxsink
 ```
 nvarguscamerasrc
   ↓ 4K @ 30fps (NV12, NVMM)
-nvvidconv (VIC crop)
-  ↓ 2880x1620 @ 30fps (NV12, NVMM) - edge coordinates
-nvvidconv (format conversion)
-  ↓ 2880x1620 @ 30fps (NV12, system memory)
+nvvidconv (NVMM → system memory, no crop)
+  ↓ 3840x2160 @ 30fps (NV12, system memory)
+videocrop (CPU trim to match config)
+  ↓ ~2880x1616 @ 30fps (NV12, system memory)
 videoconvert
-  ↓ 2880x1620 @ 30fps (I420)
+  ↓ ~2880x1616 @ 30fps (I420)
 x264enc (3 Mbps, threads=4)
   ↓ H.264
 hlssink2
-  → /tmp/hls/cam{id}.m3u8 (2s segments, keep 5)
+  → /dev/shm/hls/cam{id}.m3u8 (2s segments, keep 5)
 ```
 
 ## Camera Configuration
@@ -254,23 +254,23 @@ hlssink2
 
 **Current Settings**:
 - Rotation: 0° (both cameras)
-- Crop: Centered 480px/270px margins (both cameras)
+- Crop: Trim 480px left/right, 272px top/bottom (both cameras)
 - Barrel correction: Disabled (k1=0, k2=0)
 - Digital gain: Enabled (1-4x)
 - Analog gain: Enabled (1-16x)
 - Exposure time: 13µs - 33ms
 
-**VIC Crop Format** (EDGE COORDINATES):
+**Software Crop Format** (TRIM VALUES):
 ```json
 {
-  "left": 480,    // Left edge at pixel 480
-  "right": 480,   // Right edge at pixel 3360 (3840-480)
-  "top": 270,     // Top edge at pixel 270
-  "bottom": 270   // Bottom edge at pixel 1890 (2160-270)
+  "left": 480,    // Trim 480 pixels from left edge
+  "right": 480,   // Trim 480 pixels from right edge
+  "top": 272,     // Trim 272 pixels from top edge
+  "bottom": 272   // Trim 272 pixels from bottom edge
 }
 ```
 
-Result: 2880×1620 centered crop from 3840×2160 source
+Result: 2880×1616 centered crop from 3840×2160 source (values adjustable per camera)
 
 ## Testing
 
@@ -339,24 +339,24 @@ ls -lh /mnt/recordings/test_v3/segments/
 
 3. **Update systemd service** once validated:
    ```bash
-   sudo systemctl edit footballvision-api.service
+   sudo systemctl edit footballvision-api-enhanced.service
    # Change ExecStart to use simple_api_v3.py
    sudo systemctl daemon-reload
-   sudo systemctl restart footballvision-api
+   sudo systemctl restart footballvision-api-enhanced
    ```
 
 ### Option 2: Direct Switch
 
 1. **Stop current API**:
    ```bash
-   sudo systemctl stop footballvision-api
+   sudo systemctl stop footballvision-api-enhanced
    ```
 
 2. **Update systemd service** to use simple_api_v3.py
 
 3. **Start new API**:
    ```bash
-   sudo systemctl start footballvision-api
+   sudo systemctl start footballvision-api-enhanced
    ```
 
 ## Known Limitations
@@ -378,7 +378,7 @@ ls -lh /mnt/recordings/test_v3/segments/
 
 4. **No mode switching**:
    - v3 API doesn't support multiple recording modes (normal/no_crop)
-   - Uses single optimized pipeline with VIC crop
+   - Uses single optimized crop pipeline driven by software `videocrop`
    - Mode switching can be added if needed
 
 ## Performance Metrics
@@ -392,12 +392,10 @@ ls -lh /mnt/recordings/test_v3/segments/
 | Get status | ~200ms | ~10ms | 20x faster |
 | Start preview | ~500ms | ~100ms | 5x faster |
 
-### Expected Recording Performance
-
 - Target: 30 fps
-- Expected: 25-27 fps (based on previous tests with VIC crop)
+- Expected: 25-27 fps (validated with the software crop pipeline)
 - Bitrate: 12 Mbps per camera
-- Resolution: 2880×1620
+- Resolution: ~2880×1616 (depends on configured trim)
 - Format: H.264 in Matroska containers
 - Segments: 10-minute chunks
 

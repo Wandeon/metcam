@@ -1,7 +1,7 @@
 # FootballVision Pro Documentation
 
-**System Version**: 2.0 (Native 4K Pipeline)
-**Last Updated**: October 17, 2025
+**System Version**: 3.0 (In-Process GStreamer Pipeline)
+**Last Updated**: October 22, 2025
 
 ---
 
@@ -15,38 +15,31 @@
 - **Contents**: Basic setup, recording workflow, downloading videos
 - **Audience**: Operators, coaches, non-technical users
 
-**[Troubleshooting Guide](./user/TROUBLESHOOTING.md)**
-- **Location**: `docs/user/TROUBLESHOOTING.md`
-- **Purpose**: Common issues and solutions
-- **Contents**: System diagnostics, frame drops, video quality issues, green/grey screen fixes
-- **Audience**: All users, first-line support
+**Troubleshooting**
+- Refer to the [Deployment Guide – Troubleshooting](./DEPLOYMENT_GUIDE.md#10-troubleshooting) section for common issues and recovery steps.
 
 ### 🔧 Technical Documentation
 
-**[Recording Pipeline Reference](./technical/RECORDING_PIPELINE.md)** ⭐ NEW
-- **Location**: `docs/technical/RECORDING_PIPELINE.md`
-- **Size**: 900+ lines of detailed technical documentation
-- **Purpose**: Complete architectural and technical reference for the native 4K recording pipeline
+**[GStreamer Pipeline Reference](./technical/GSTREAMER_PIPELINES.md)**
+- **Location**: `docs/technical/GSTREAMER_PIPELINES.md`
+- **Purpose**: Source of truth for recording and preview pipeline configuration
 - **Contents**:
-  - GStreamer pipeline architecture with flow diagrams
-  - Detailed explanation of every pipeline element
-  - Camera sensor and ISP configuration
-  - Performance characteristics (CPU, thermal, storage, framerate)
-  - Lighting behavior analysis (daylight vs low light)
-  - Troubleshooting pipeline-specific issues
-  - Advanced configuration and tuning
+  - Current per-camera pipeline listings (recording + preview)
+  - Crop math for 2880×1616 output and default trims
+  - Performance characteristics and resource usage
+  - Troubleshooting tips (caps negotiation, chroma integrity)
+  - Historical notes on deprecated GPU/VIC cropping
 - **Audience**: Developers, DevOps, technical support
 
-**[API Reference](./technical/API_REFERENCE.md)**
+**[API Reference](./technical/API_REFERENCE.md) (v3)**
 - **Location**: `docs/technical/API_REFERENCE.md`
 - **Purpose**: Complete REST API documentation
 - **Contents**:
-  - All endpoints with request/response examples
-  - Recording and preview mode management
-  - Error codes and handling
-  - TypeScript interfaces
-  - Complete workflow examples
-  - Prometheus metrics
+  - Recording & preview endpoints (start/stop/status/restart)
+  - Health/status telemetry responses
+  - Recordings management (list, segments, delete, download)
+  - Error format and protection behaviour (10 s recording lock)
+  - Example `curl` calls for common workflows
 - **Audience**: Developers, integration engineers
 
 **[Deployment Guide](./DEPLOYMENT_GUIDE.md)**
@@ -97,7 +90,7 @@ FootballVision Pro is a dual-camera recording system designed for capturing high
 ### Key Features
 
 **Native 4K Recording Pipeline** ✨
-- **Resolution**: 2880×1620 @ 25 fps (4.67 megapixels per frame)
+- **Resolution**: 2880×1616 @ 25 fps (4.66 megapixels per frame)
 - **FOV**: 56% center crop from 4K sensor (no downscaling)
 - **Quality**: 18 Mbps H.264 encoding with native 4K sharpness
 - **Reliability**: Rock-solid 25.0 fps with ±0.1 fps variance
@@ -106,10 +99,10 @@ FootballVision Pro is a dual-camera recording system designed for capturing high
 **Dual Camera System**
 - Simultaneous recording from 2× IMX477 cameras (12.3 MP sensors)
 - Independent CPU core allocation (cores 0-2 for cam0, cores 3-5 for cam1)
-- Segmented recording (5-minute MKV files for easy handling)
+- Segmented recording (10-minute MP4 files with timestamped filenames)
 
 **Web Dashboard**
-- Live preview streaming (calibration and setup modes)
+- Live preview streaming (same crop as recording, HLS)
 - Recording control and monitoring
 - Match downloads and management
 - Real-time system status
@@ -132,7 +125,7 @@ FootballVision Pro is a dual-camera recording system designed for capturing high
 **Getting Started**:
 1. Read [Quick Start Guide](./user/QUICK_START_GUIDE.md) for basic setup
 2. Follow [Deployment Guide](./DEPLOYMENT_GUIDE.md) for installation
-3. Refer to [Troubleshooting Guide](./user/TROUBLESHOOTING.md) if issues arise
+3. Use the Troubleshooting section in the [Deployment Guide](./DEPLOYMENT_GUIDE.md#10-troubleshooting) if issues arise
 
 **Daily Operation**:
 - Start recording via web dashboard
@@ -142,42 +135,32 @@ FootballVision Pro is a dual-camera recording system designed for capturing high
 ### For Developers
 
 **System Architecture**:
-1. **[Recording Pipeline Reference](./technical/RECORDING_PIPELINE.md)** - Deep dive into GStreamer pipeline, performance characteristics, and technical specifications
-2. **[API Reference](./technical/API_REFERENCE.md)** - REST API endpoints, request/response formats, and integration examples
+1. **[GStreamer Pipeline Reference](./technical/GSTREAMER_PIPELINES.md)** - Current recording/preview pipeline details, caps, and troubleshooting
+2. **[API Reference](./technical/API_REFERENCE.md)** - REST endpoints, request/response formats, and integration examples
 3. **[Deployment Guide](./DEPLOYMENT_GUIDE.md)** - Installation procedures and system configuration
 
 **Key Components**:
-- **API Service**: `/home/mislav/footballvision-pro/src/platform/simple_api_enhanced.py`
-- **Recording Scripts**: `/home/mislav/footballvision-pro/scripts/record_dual_native4k_55fov.sh`
-- **Preview Service**: `/home/mislav/footballvision-pro/src/video-pipeline/preview_service_*.py`
+- **API Service**: `/home/mislav/footballvision-pro/src/platform/simple_api_v3.py`
+- **Recording Pipeline**: `/home/mislav/footballvision-pro/src/video-pipeline/recording_service.py` and `pipeline_builders.py`
+- **Preview Service**: `/home/mislav/footballvision-pro/src/video-pipeline/preview_service.py`
 - **Web Dashboard**: `/home/mislav/footballvision-pro/src/platform/web-dashboard/`
 
 ---
 
-## Recording Modes
+## Recording Pipeline Defaults
 
-### Production Recording (Default)
+- Resolution: 2880×1616 (software `videocrop` trims 480/480/272/272)
+- Framerate: 25 fps (IDR every 60 frames)
+- Bitrate: 18 Mbps per camera (x264, ultrafast/zerolatency)
+- Segments: 10-minute MP4 files (`cam{N}_{timestamp}_%02d.mp4`)
+- Protection: Stops within the first 10 seconds require `force=true`
 
-**Mode**: `normal`
-- **Resolution**: 2880×1620
-- **Framerate**: 25 fps
-- **FOV**: 56% (center crop)
-- **Bitrate**: 18 Mbps per camera
-- **Use Case**: Match-day recording
+### Preview Characteristics
 
-### Setup/Alignment
-
-**Mode**: `no_crop`
-- **Resolution**: 1920×1080
-- **Framerate**: 30 fps
-- **FOV**: 100% (full sensor, downscaled)
-- **Bitrate**: 15 Mbps per camera
-- **Use Case**: Camera positioning and alignment
-
-### Preview Modes
-
-**Normal Preview**: 1280×720 @ 15fps (50% FOV, 2 Mbps)
-**Calibration Preview**: 1920×1080 @ 30fps (25% FOV, 8 Mbps) - for focus calibration
+- Resolution: 2880×1616 (matches recording crop)
+- Framerate: 30 fps (IDR every 60 frames)
+- Bitrate: 3 Mbps per camera
+- Segments: 2‑second TS files in `/dev/shm/hls`, exposed at `/hls/cam{N}.m3u8`
 
 ---
 
@@ -245,7 +228,7 @@ FootballVision Pro is a dual-camera recording system designed for capturing high
 - **Total Size**: ~24.3 GB
 - **Per Camera**: ~12.2 GB
 - **Per Minute**: ~270 MB
-- **Per Segment (5 min)**: ~1.3 GB
+- **Per Segment (10 min)**: ~1.35 GB per camera
 
 ### Storage Device Recommendations
 
@@ -310,12 +293,12 @@ Via UI:
 curl -X DELETE http://localhost/api/v1/recording
 ```
 
-### Start Calibration Preview
+### Start Preview
 
 ```bash
-curl -X POST http://localhost/api/v1/preview/start \
+curl -X POST http://localhost/api/v1/preview \
   -H 'Content-Type: application/json' \
-  -d '{"mode":"calibration"}'
+  -d '{}'
 ```
 
 ### Check Framerate in Recording
@@ -323,12 +306,20 @@ curl -X POST http://localhost/api/v1/preview/start \
 ```bash
 ffprobe -v error -count_frames -select_streams v:0 \
   -show_entries stream=nb_read_frames,avg_frame_rate \
-  /mnt/recordings/match_001/segments/cam0_00000.mkv
+  /mnt/recordings/match_001/segments/cam0_20250115_123456_00.mp4
 ```
 
 ---
 
 ## Version History
+
+### Version 3.0 (October 22, 2025) – In-Process Architecture Refresh
+
+- Migrated from shell-based scripts to in-process GStreamer services (`recording_service.py`, `preview_service.py`, `simple_api_v3.py`)
+- Added 10-second recording protection, state persistence, and instant start/stop semantics
+- Unified recording and preview pipelines with CPU-based `videocrop` for 2880×1616 output
+- Switched recording segments to timestamped MP4 files (10-minute rolls)
+- Removed API mode switching; camera configuration now controls FOV adjustments
 
 ### Version 2.1 (October 20, 2025) - Camera Configuration System
 
@@ -365,7 +356,7 @@ ffprobe -v error -count_frames -select_streams v:0 \
 ### Version 2.0 (October 17, 2025)
 
 **Native 4K Pipeline**:
-- Implemented native 4K recording at 2880×1620 @ 25fps
+- Implemented native 4K recording at 2880×1616 @ 25fps
 - 56% FOV coverage with center crop
 - No downscaling for maximum sharpness
 - 25.0 fps sustained performance validated over 15+ minute recordings
@@ -378,12 +369,13 @@ ffprobe -v error -count_frames -select_streams v:0 \
 
 **UI Enhancements**:
 - Fixed fullscreen toggle not interrupting preview stream
+- Added calibration preview mode (1920×1080 @ 30fps) *(legacy feature, removed in v3)*
 - Added calibration preview mode (1920×1080 @ 30fps)
 - Updated recording state management for real-time updates
 
 **Documentation**:
 - Created comprehensive Recording Pipeline Technical Reference
-- Updated API Reference with mode management
+- Updated API Reference with mode management (legacy, superseded by v3)
 - Enhanced Deployment Guide with validation procedures
 - Updated Troubleshooting Guide with pipeline-specific issues
 
@@ -399,96 +391,60 @@ ffprobe -v error -count_frames -select_streams v:0 \
 
 **Internal Documentation**: This documentation is maintained for the FootballVision Pro development team.
 
-**For Questions**:
-- Technical issues: Check [Troubleshooting Guide](./user/TROUBLESHOOTING.md)
-- Pipeline details: See [Recording Pipeline Reference](./technical/RECORDING_PIPELINE.md)
-- API integration: Refer to [API Reference](./technical/API_REFERENCE.md)
-
 **System Logs**:
 ```bash
-journalctl -u footballvision-api-enhanced -f  # API service logs
-journalctl -u footballvision-api-enhanced -n 100  # Last 100 lines
+journalctl -u footballvision-api-enhanced -f        # API service logs
+journalctl -u footballvision-api-enhanced -n 100    # Last 100 lines
 ```
-
----
+> Ensure the systemd unit points to `simple_api_v3.py` before relying on these commands.
 
 ---
 
 ## Documentation File Structure
 
-Complete documentation tree with file locations:
-
 ```
 footballvision-pro/
 └── docs/
-    ├── README.md                           # This file - Documentation index
-    ├── DEPLOYMENT_GUIDE.md                 # Installation and setup guide
-    ├── CAMERA_CONFIGURATION.md             # ⭐ NEW Camera config technical reference (1500+ lines)
-    ├── CAMERA_CONTROLS_QUICK_GUIDE.md      # ⭐ NEW Quick reference for camera controls
-    │
-    ├── user/                               # End-user documentation
-    │   ├── QUICK_START_GUIDE.md           # Basic operation guide
-    │   └── TROUBLESHOOTING.md             # Common issues and fixes
-    │
-    └── technical/                          # Technical documentation
-        ├── RECORDING_PIPELINE.md          # Complete pipeline reference (900+ lines)
-        └── API_REFERENCE.md               # REST API documentation
+    ├── README.md                     # Documentation index (this file)
+    ├── ARCHITECTURE.md               # In-process architecture overview
+    ├── DEPLOYMENT_GUIDE.md           # Installation, validation & troubleshooting
+    ├── CAMERA_CONFIGURATION.md       # Camera configuration reference
+    ├── CAMERA_CONTROLS_QUICK_GUIDE.md# Operator quick reference
+    ├── technical/
+    │   ├── API_REFERENCE.md          # REST API reference (v3)
+    │   └── GSTREAMER_PIPELINES.md    # Recording/preview pipeline details
+    └── user/
+        └── QUICK_START_GUIDE.md      # End-user workflow summary
 ```
 
-### File Sizes and Content
-
-| File | Size | Lines | Last Updated |
-|------|------|-------|--------------|
-| **CAMERA_CONFIGURATION.md** ⭐ NEW | 36 KB | 1500+ | Oct 20, 2025 |
-| **CAMERA_CONTROLS_QUICK_GUIDE.md** ⭐ NEW | 9 KB | 400+ | Oct 20, 2025 |
-| **RECORDING_PIPELINE.md** | 27 KB | 900+ | Oct 17, 2025 |
-| **API_REFERENCE.md** | 15 KB | 670+ | Oct 17, 2025 |
-| **DEPLOYMENT_GUIDE.md** | 10 KB | 370+ | Oct 17, 2025 |
-| **TROUBLESHOOTING.md** | 4 KB | 100+ | Oct 17, 2025 |
-| **README.md** (this file) | 10 KB | 480+ | Oct 20, 2025 |
-| **QUICK_START_GUIDE.md** | 3 KB | 94 | Oct 1, 2025 |
-
-### Key Source Code Locations
-
-Referenced throughout the documentation:
+## Key Source Code Locations
 
 ```
 footballvision-pro/
 ├── config/
-│   └── camera_config.json                 # ⭐ Camera configuration storage
-│
-├── scripts/
-│   ├── record_dual_native4k_55fov.sh      # Production recording pipeline
-│   └── record_dual_1080p30_no_crop.sh     # Setup/alignment mode
-│
-├── shaders/
-│   └── shader_generator.py                # ⭐ Dynamic GLSL shader generation
+│   └── camera_config.json                # Persisted crop/rotation/distortion settings
 │
 ├── src/
 │   ├── platform/
-│   │   ├── simple_api_enhanced.py         # Enhanced API service (with camera config endpoints)
-│   │   └── web-dashboard/
+│   │   ├── simple_api_v3.py             # FastAPI service (recording + preview control)
+│   │   └── web-dashboard/               # React frontend
 │   │       └── src/
-│   │           ├── types/
-│   │           │   └── camera.ts          # ⭐ Camera config TypeScript types
-│   │           ├── services/
-│   │           │   └── api.ts             # API client (with camera methods)
-│   │           ├── components/
-│   │           │   └── CameraControlPanel.tsx  # ⭐ Camera controls UI
-│   │           └── pages/
-│   │               └── Preview.tsx        # Preview page (with camera controls)
-│   │
+│   │           ├── services/api.ts      # REST client (v3 endpoints)
+│   │           └── components/          # UI components (Camera controls, Dashboard)
 │   └── video-pipeline/
-│       ├── camera_config_manager.py       # ⭐ Configuration management
-│       ├── preview_service_gpu_corrected.py  # GPU-accelerated preview
-│       ├── recording_manager_enhanced.py  # Recording mode management
-│       └── preview_service.py             # Preview streaming
+│       ├── gstreamer_manager.py         # GLib main loop + pipeline lifecycle
+│       ├── pipeline_builders.py         # Canonical recording/preview pipeline strings
+│       ├── recording_service.py         # Dual-camera recording orchestration
+│       ├── preview_service.py           # Dual-camera HLS preview orchestration
+│       └── camera_config_manager.py     # Thread-safe config loading/writing
 │
-└── docs/                                  # Documentation (this directory)
+└── docs/                                # Documentation bundle
 ```
+
+Legacy shell scripts remain in `scripts/` for historical reference; v3 no longer depends on them.
 
 ---
 
-**Documentation Version**: 2.1
-**System Version**: Native 4K @ 25fps (2880×1620, 56% FOV) + Interactive Camera Configuration
-**Last Updated**: October 20, 2025
+**Documentation Version**: 3.0
+**System Version**: In-Process GStreamer Pipeline @ 25 fps (2880×1616, 56% FOV)
+**Last Updated**: October 22, 2025

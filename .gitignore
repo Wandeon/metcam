@@ -6,9 +6,18 @@ dist/
 *.pyc
 __pycache__/
 
+# Backup files
+*.backup
+*.backup_*
+*.bak
+*.bak2
+*.old
+*.BROKEN_*
+
 # Development
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 .DS_Store
