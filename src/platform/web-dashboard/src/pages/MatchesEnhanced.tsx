@@ -143,6 +143,35 @@ export const Matches: React.FC = () => {
     return matchesCopy;
   }, [matches, sortOption]);
 
+  const currentMatch = downloadModalMatchId ? matches.find(m => m.id === downloadModalMatchId) : null;
+
+  const cameraSegments = useMemo(() => {
+    if (!segmentDetails) {
+      return [] as SegmentInfo[];
+    }
+    const segments = segmentDetails[activeCamera] || [];
+    return [...segments].sort((a, b) => a.segment_number - b.segment_number);
+  }, [segmentDetails, activeCamera]);
+
+  const cameraFileMap = useMemo(() => {
+    const map: Record<'cam0' | 'cam1', RecordingEntry | undefined> = { cam0: undefined, cam1: undefined };
+    currentMatch?.files.forEach(entry => {
+      const cameraKey = getCameraKey(entry.file);
+      if (cameraKey === 'cam0' || cameraKey === 'cam1') {
+        map[cameraKey] = entry;
+      }
+    });
+    return map;
+  }, [currentMatch]);
+
+  const hasSegmentedFiles = currentMatch?.files.some(
+    entry => entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1)
+  );
+
+  const singleFiles = currentMatch?.files.filter(
+    entry => !(entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1))
+  ) ?? [];
+
   const loadMatches = async () => {
     try {
       const [recordingsResponse, healthResponse] = await Promise.all([
@@ -380,34 +409,6 @@ export const Matches: React.FC = () => {
       <div className="p-4 md:p-6 animate-pulse">Loading recordings…</div>
     );
   }
-
-  const currentMatch = downloadModalMatchId ? matches.find(m => m.id === downloadModalMatchId) : null;
-  const cameraSegments = useMemo(() => {
-    if (!segmentDetails) {
-      return [] as SegmentInfo[];
-    }
-    const segments = segmentDetails[activeCamera] || [];
-    return [...segments].sort((a, b) => a.segment_number - b.segment_number);
-  }, [segmentDetails, activeCamera]);
-
-  const cameraFileMap = useMemo(() => {
-    const map: Record<'cam0' | 'cam1', RecordingEntry | undefined> = { cam0: undefined, cam1: undefined };
-    currentMatch?.files.forEach(entry => {
-      const cameraKey = getCameraKey(entry.file);
-      if (cameraKey === 'cam0' || cameraKey === 'cam1') {
-        map[cameraKey] = entry;
-      }
-    });
-    return map;
-  }, [currentMatch]);
-
-  const hasSegmentedFiles = currentMatch?.files.some(
-    entry => entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1)
-  );
-
-  const singleFiles = currentMatch?.files.filter(
-    entry => !(entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1))
-  ) ?? [];
 
   return (
     <div className="p-4 md:p-6">
