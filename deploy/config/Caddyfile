@@ -1,0 +1,62 @@
+# FootballVision Pro - Caddy Configuration
+# Deploy to: /etc/caddy/Caddyfile
+
+:80 {
+	# HLS preview streams - serve from /dev/shm/hls/
+	handle /hls/* {
+		root * /dev/shm
+		file_server {
+			hide .*
+		}
+		header {
+			Cache-Control no-cache
+			Access-Control-Allow-Origin *
+		}
+		header *.m3u8 Content-Type application/vnd.apple.mpegurl
+		header *.ts Content-Type video/mp2t
+	}
+
+	# Serve recording files for download
+	handle /recordings/* {
+		root * /mnt
+		file_server browse
+		header Content-Disposition "attachment"
+	}
+
+	# Proxy API requests to backend
+	handle /api/* {
+		reverse_proxy localhost:8000 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Grafana dashboards (optional monitoring)
+	handle /grafana/* {
+		reverse_proxy localhost:3000
+	}
+
+	# Prometheus (optional monitoring)
+	handle /prometheus/* {
+		reverse_proxy localhost:9090
+	}
+
+	# Serve static files (must be last to act as fallback)
+	handle {
+		root * /var/www/footballvision
+		try_files {path} {path}/ /index.html
+		file_server
+
+		# Cache busting for assets
+		header /assets/* {
+			Cache-Control "no-cache, no-store, must-revalidate"
+			Pragma "no-cache"
+			Expires "0"
+		}
+	}
+
+	# Enable logging
+	log {
+		output file /var/log/caddy/access.log
+		format console
+	}
+}
