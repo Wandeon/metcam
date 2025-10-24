@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiService } from '@/services/api';
 import { CameraPreview } from '@/components/CameraPreview';
-import { CameraConfigControls } from '@/components/CameraConfigControls';
-import { Play, Square, AlertCircle, Eye, Settings } from 'lucide-react';
+import { Play, Square, AlertCircle, Eye } from 'lucide-react';
 // v2.0 - 30fps @ 3Mbps smooth streaming (native 1080p60 sensor mode)
 
 export const Preview: React.FC = () => {
@@ -11,9 +10,8 @@ export const Preview: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [showControls, setShowControls] = useState(false);
-  const [streamKey, setStreamKey] = useState(0); // Force HLS player reload
-  const [isReloading, setIsReloading] = useState(false); // Hide players while restarting
+  const [streamKey] = useState(0); // Force HLS player reload (fixed key for v3)
+  const [isReloading] = useState(false); // Not used in v3 (no dynamic config)
 
   const fetchPreviewStatus = async () => {
     try {
@@ -50,7 +48,6 @@ export const Preview: React.FC = () => {
       await fetchPreviewStatus();
       // Wait for HLS files to be ready before showing players
       await new Promise(resolve => setTimeout(resolve, 6000));
-      setStreamKey(prev => prev + 1); // Force HLS player reload
     } catch (err) {
       setError('Failed to start preview');
       setTimeout(() => setError(null), 5000);
@@ -76,7 +73,6 @@ export const Preview: React.FC = () => {
       await fetchPreviewStatus();
       // Wait for HLS files to be ready before showing players
       await new Promise(resolve => setTimeout(resolve, 6000));
-      setStreamKey(prev => prev + 1); // Force HLS player reload
     } catch (err) {
       setError('Failed to start calibration');
       setTimeout(() => setError(null), 5000);
@@ -263,43 +259,6 @@ export const Preview: React.FC = () => {
         </div>
       )}
 
-      {/* Camera Configuration Controls */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center">
-            <Settings className="w-6 h-6 text-gray-700 mr-2" />
-            <h2 className="text-xl font-semibold">Camera Configuration</h2>
-          </div>
-          <button
-            onClick={() => setShowControls(!showControls)}
-            className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition-colors"
-          >
-            {showControls ? 'Hide Controls' : 'Show Controls'}
-          </button>
-        </div>
-
-        {showControls && (
-          <CameraConfigControls onApply={async () => {
-            // Hide video players to destroy old HLS connections
-            setIsReloading(true);
-
-            // Wait a bit for old players to fully destroy
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Fetch updated status (backend has restarted preview)
-            await fetchPreviewStatus();
-
-            // Wait for HLS segments to be created (measured: 5+ seconds needed)
-            await new Promise(resolve => setTimeout(resolve, 6000));
-
-            // Increment key to force new components with fresh HLS players
-            setStreamKey(prev => prev + 1);
-
-            // Show video players again
-            setIsReloading(false);
-          }} />
-        )}
-      </div>
     </div>
   );
 };
