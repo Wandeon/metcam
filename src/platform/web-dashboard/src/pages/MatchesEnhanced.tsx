@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, Film, RefreshCw, Trash2, ChevronRight, ArrowLeft, Package } from 'lucide-react';
+import { Download, Film, RefreshCw, Trash2, Package } from 'lucide-react';
 
 interface RecordingEntry {
   file: string;
@@ -114,9 +114,9 @@ export const Matches: React.FC = () => {
   const [matches, setMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloadModalMatchId, setDownloadModalMatchId] = useState<string | null>(null);
-  const [segmentModal, setSegmentModal] = useState<{ matchId: string; camera: 'cam0' | 'cam1' } | null>(null);
   const [segmentDetails, setSegmentDetails] = useState<SegmentDetails | null>(null);
-  const [loadingSegments, setLoadingSegments] = useState(false);
+  const [segmentsLoading, setSegmentsLoading] = useState(false);
+  const [activeCamera, setActiveCamera] = useState<'cam0' | 'cam1'>('cam0');
   const [deletingMatchId, setDeletingMatchId] = useState<string | null>(null);
   const [diskStatus, setDiskStatus] = useState<{ freeGb: number; percentUsed: number } | null>(null);
   const [sortOption, setSortOption] = useState<'date_desc' | 'date_asc' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'>('date_desc');
@@ -262,35 +262,94 @@ export const Matches: React.FC = () => {
 
   const handleDownloadClick = (matchId: string) => {
     setDownloadModalMatchId(matchId);
+    setSegmentDetails(null);
   };
 
   const handleDownloadModalClose = () => {
     setDownloadModalMatchId(null);
-    setSegmentModal(null);
     setSegmentDetails(null);
+    setSegmentsLoading(false);
   };
 
-  const handleCameraClick = async (matchId: string, camera: 'cam0' | 'cam1') => {
-    setSegmentModal({ matchId, camera });
-    setLoadingSegments(true);
-
-    try {
-      const response = await fetch(`/api/v1/recordings/${matchId}/segments`);
-      const data = await response.json();
-      setSegmentDetails(data);
-    } catch (error) {
-      console.error('Failed to load segments:', error);
-      alert('Failed to load segment details');
-      setSegmentModal(null);
-    } finally {
-      setLoadingSegments(false);
+  useEffect(() => {
+    if (!downloadModalMatchId) {
+      return;
     }
-  };
 
-  const handleBackToCamera = () => {
-    setSegmentModal(null);
-    setSegmentDetails(null);
-  };
+    const match = matches.find(m => m.id === downloadModalMatchId);
+    if (!match) {
+      return;
+    }
+
+    const availableCameras = (['cam0', 'cam1'] as const).filter(camera =>
+      match.files.some(entry => getCameraKey(entry.file) === camera)
+    );
+
+    if (availableCameras.length > 0) {
+      setActiveCamera(prev => (availableCameras.includes(prev) ? prev : availableCameras[0]));
+    }
+
+    const requiresSegmentDetails = match.files.some(
+      entry => entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1)
+    );
+
+    if (!requiresSegmentDetails) {
+      setSegmentsLoading(false);
+      setSegmentDetails(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadSegmentDetails = async () => {
+      setSegmentsLoading(true);
+      try {
+        const response = await fetch(`/api/v1/recordings/${match.id}/segments`);
+        if (!response.ok) {
+          throw new Error(`Failed to load segment details (${response.status})`);
+        }
+        const data: SegmentDetails = await response.json();
+        if (cancelled) {
+          return;
+        }
+        const sortSegments = (segments: SegmentInfo[]) =>
+          [...segments].sort((a, b) => a.segment_number - b.segment_number);
+        setSegmentDetails({
+          ...data,
+          cam0: sortSegments(data.cam0 || []),
+          cam1: sortSegments(data.cam1 || []),
+        });
+      } catch (error) {
+        console.error('Failed to load segments:', error);
+        if (!cancelled) {
+          alert('Failed to load segment details');
+        }
+      } finally {
+        if (!cancelled) {
+          setSegmentsLoading(false);
+        }
+      }
+    };
+
+    loadSegmentDetails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [downloadModalMatchId, matches]);
+
+  useEffect(() => {
+    if (!segmentDetails) {
+      return;
+    }
+
+    const available = (['cam0', 'cam1'] as const).filter(camera =>
+      segmentDetails[camera] && segmentDetails[camera].length > 0
+    );
+
+    if (available.length > 0 && !available.includes(activeCamera)) {
+      setActiveCamera(available[0]);
+    }
+  }, [segmentDetails, activeCamera]);
 
   const handleDeleteClick = async (matchId: string) => {
     if (!confirm(`Are you sure you want to delete recording "${matchId}"?`)) {
@@ -323,9 +382,32 @@ export const Matches: React.FC = () => {
   }
 
   const currentMatch = downloadModalMatchId ? matches.find(m => m.id === downloadModalMatchId) : null;
-  const currentSegments = segmentModal && segmentDetails
-    ? segmentDetails[segmentModal.camera]
-    : [];
+  const cameraSegments = useMemo(() => {
+    if (!segmentDetails) {
+      return [] as SegmentInfo[];
+    }
+    const segments = segmentDetails[activeCamera] || [];
+    return [...segments].sort((a, b) => a.segment_number - b.segment_number);
+  }, [segmentDetails, activeCamera]);
+
+  const cameraFileMap = useMemo(() => {
+    const map: Record<'cam0' | 'cam1', RecordingEntry | undefined> = { cam0: undefined, cam1: undefined };
+    currentMatch?.files.forEach(entry => {
+      const cameraKey = getCameraKey(entry.file);
+      if (cameraKey === 'cam0' || cameraKey === 'cam1') {
+        map[cameraKey] = entry;
+      }
+    });
+    return map;
+  }, [currentMatch]);
+
+  const hasSegmentedFiles = currentMatch?.files.some(
+    entry => entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1)
+  );
+
+  const singleFiles = currentMatch?.files.filter(
+    entry => !(entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1))
+  ) ?? [];
 
   return (
     <div className="p-4 md:p-6">
@@ -370,71 +452,7 @@ export const Matches: React.FC = () => {
         </div>
       </div>
 
-      {/* Level 1: Camera Selection Modal */}
-      {downloadModalMatchId && !segmentModal && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
-          onClick={handleDownloadModalClose}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-xl font-bold mb-2">Download Recording</h3>
-            <p className="text-gray-600 mb-4">
-              <strong>{downloadModalMatchId}</strong>
-            </p>
-
-            <div className="flex flex-col gap-2">
-              {currentMatch?.files.map((entry) => {
-                const isSegmented = entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1);
-                const camera = entry.file.includes('cam0') ? 'cam0' : 'cam1';
-                const createdLabel = formatTimestamp(entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined));
-
-                return (
-                  <button
-                    key={entry.file}
-                    onClick={() => isSegmented
-                      ? handleCameraClick(downloadModalMatchId, camera)
-                      : window.location.href = `/recordings/${downloadModalMatchId}/segments/${entry.file}`
-                    }
-                    className="flex items-center justify-between px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
-                  >
-                    <span className="flex flex-col items-start text-left">
-                      <span className="flex items-center">
-                        <Download className="w-4 h-4 mr-2" />
-                        {formatLabel(entry.file)}
-                        {isSegmented && entry.segment_count && (
-                          <span className="ml-2 px-2 py-0.5 bg-blue-500 rounded text-xs">
-                            {entry.segment_count} segments
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-xs text-gray-200 mt-1">{createdLabel}</span>
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <span className="text-xs opacity-75">{formatSize(entry.size_mb)}</span>
-                      {isSegmented && <ChevronRight className="w-4 h-4" />}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex justify-end mt-6">
-              <button
-                onClick={handleDownloadModalClose}
-                className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Level 2: Segment Details Modal */}
-      {segmentModal && (
+      {downloadModalMatchId && (
         <div
           className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
           onClick={handleDownloadModalClose}
@@ -443,105 +461,150 @@ export const Matches: React.FC = () => {
             className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center mb-4">
-              <button
-                onClick={handleBackToCamera}
-                className="mr-3 p-1 hover:bg-gray-100 rounded"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <div>
-                <h3 className="text-xl font-bold">
-                  {segmentModal.camera === 'cam0' ? 'Camera 0' : 'Camera 1'} - Segments
-                </h3>
-                <p className="text-sm text-gray-600">{segmentModal.matchId}</p>
-              </div>
-            </div>
+            <h3 className="text-xl font-bold mb-2">Download Recording</h3>
+            <p className="text-gray-600 mb-4">
+              <strong>{downloadModalMatchId}</strong>
+            </p>
 
-            {loadingSegments ? (
-              <div className="py-8 text-center text-gray-500">
-                Loading segments...
-              </div>
-            ) : (
-              <>
-                {/* Summary Box */}
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-sm font-medium text-gray-700">Total Segments:</span>
-                      <span className="ml-2 text-lg font-bold text-blue-600">
-                        {currentSegments.length}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-sm font-medium text-gray-700">Total Size:</span>
-                      <span className="ml-2 text-lg font-bold text-blue-600">
-                        {formatSize(currentSegments.reduce((sum, s) => sum + s.size_mb, 0))}
-                      </span>
-                    </div>
-                    {segmentDetails?.segment_duration_minutes && (
-                      <div className="col-span-2">
-                        <span className="text-sm font-medium text-gray-700">Segment Duration:</span>
-                        <span className="ml-2 text-sm text-gray-600">
-                          ~{segmentDetails.segment_duration_minutes} minutes each
+            {hasSegmentedFiles && (
+              <div className="mb-6">
+                <h4 className="text-lg font-semibold text-gray-800 mb-2">Segmented Cameras</h4>
+                <p className="text-sm text-gray-600 mb-3">Select a camera to view all available segments.</p>
+
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {(['cam0', 'cam1'] as const).map(camera => {
+                    const segmentCount = segmentDetails
+                      ? segmentDetails[camera]?.length ?? 0
+                      : cameraFileMap[camera]?.segment_count ?? 0;
+                    const hasSegments = segmentCount > 0 || segmentsLoading;
+                    const label = camera === 'cam0' ? 'Cam 0' : 'Cam 1';
+                    const isActive = activeCamera === camera;
+
+                    return (
+                      <button
+                        key={camera}
+                        onClick={() => hasSegments && setActiveCamera(camera)}
+                        className={`px-4 py-2 rounded border text-sm font-medium transition-colors touch-manipulation ${
+                          isActive
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                        } ${!hasSegments ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        disabled={!hasSegments}
+                      >
+                        {label}
+                        <span className="ml-2 text-xs font-normal">
+                          {segmentsLoading && !segmentDetails ? 'Loading…' : `${segmentCount} segments`}
                         </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {segmentsLoading && !segmentDetails ? (
+                  <div className="py-6 text-center text-gray-500">Loading segments…</div>
+                ) : (
+                  <>
+                    {cameraSegments.length > 0 ? (
+                      <>
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <span className="text-sm font-medium text-gray-700">Total Segments:</span>
+                              <span className="ml-2 text-lg font-bold text-blue-600">{cameraSegments.length}</span>
+                            </div>
+                            <div>
+                              <span className="text-sm font-medium text-gray-700">Total Size:</span>
+                              <span className="ml-2 text-lg font-bold text-blue-600">
+                                {formatSize(cameraSegments.reduce((sum, s) => sum + s.size_mb, 0))}
+                              </span>
+                            </div>
+                            {segmentDetails?.segment_duration_minutes && (
+                              <div className="col-span-2">
+                                <span className="text-sm font-medium text-gray-700">Segment Duration:</span>
+                                <span className="ml-2 text-sm text-gray-600">
+                                  ~{segmentDetails.segment_duration_minutes} minutes each
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mb-4">
+                          <button
+                            onClick={() => {
+                              alert('Download all segments functionality coming soon');
+                            }}
+                            className="w-full flex items-center justify-center px-4 py-3 bg-green-600 text-white rounded hover:bg-green-700 font-medium touch-manipulation"
+                          >
+                            <Package className="w-5 h-5 mr-2" />
+                            Download All Segments ({cameraSegments.length} files)
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          <h5 className="text-sm font-semibold text-gray-700 mb-2">
+                            {activeCamera === 'cam0' ? 'Camera 0' : 'Camera 1'} Segments
+                          </h5>
+                          {cameraSegments.map(segment => (
+                            <div
+                              key={segment.name}
+                              className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200 hover:bg-gray-100"
+                            >
+                              <div className="flex-1">
+                                <div className="font-medium text-sm">Segment {segment.segment_number + 1}</div>
+                                <div className="text-xs text-gray-500">
+                                  {formatSize(segment.size_mb)} • {formatTimestamp(segment.created_at)}
+                                </div>
+                              </div>
+                              <a
+                                href={segment.path}
+                                download
+                                className="flex items-center px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm touch-manipulation ml-2"
+                              >
+                                <Download className="w-4 h-4 mr-1" />
+                                Download
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="p-4 text-center text-sm text-gray-500 bg-gray-50 border border-dashed border-gray-200 rounded">
+                        No segments available for {activeCamera === 'cam0' ? 'Cam 0' : 'Cam 1'}.
                       </div>
                     )}
-                  </div>
-                </div>
-
-                {/* Download All Button */}
-                <div className="mb-4">
-                  <button
-                    onClick={() => {
-                      // TODO: Implement download all as zip
-                      alert('Download all segments functionality coming soon');
-                    }}
-                    className="w-full flex items-center justify-center px-4 py-3 bg-green-600 text-white rounded hover:bg-green-700 font-medium touch-manipulation"
-                  >
-                    <Package className="w-5 h-5 mr-2" />
-                    Download All Segments ({currentSegments.length} files)
-                  </button>
-                </div>
-
-                {/* Segment List */}
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-gray-700 mb-2">Individual Segments:</h4>
-                  {currentSegments.map((segment) => (
-                    <div
-                      key={segment.name}
-                      className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200 hover:bg-gray-100"
-                    >
-                      <div className="flex-1">
-                        <div className="font-medium text-sm">
-                          Segment {segment.segment_number + 1}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {formatSize(segment.size_mb)} • {formatTimestamp(segment.created_at)}
-                        </div>
-                      </div>
-                      <a
-                        href={segment.path}
-                        download
-                        className="flex items-center px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm touch-manipulation ml-2"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Download className="w-4 h-4 mr-1" />
-                        Download
-                      </a>
-                    </div>
-                  ))}
-                </div>
-              </>
+                  </>
+                )}
+              </div>
             )}
 
-            <div className="flex justify-between mt-6">
-              <button
-                onClick={handleBackToCamera}
-                className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-              >
-                Back to Cameras
-              </button>
+            {singleFiles.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <h4 className="text-lg font-semibold text-gray-800">Direct Downloads</h4>
+                {singleFiles.map(entry => {
+                  const createdLabel = formatTimestamp(entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined));
+                  return (
+                    <a
+                      key={entry.file}
+                      href={`/recordings/${downloadModalMatchId}/segments/${entry.file}`}
+                      download
+                      className="flex items-center justify-between px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
+                    >
+                      <span className="flex flex-col text-left">
+                        <span className="flex items-center">
+                          <Download className="w-4 h-4 mr-2" />
+                          {formatLabel(entry.file)}
+                        </span>
+                        <span className="text-xs text-gray-200 mt-1">{createdLabel}</span>
+                      </span>
+                      <span className="text-xs opacity-75">{formatSize(entry.size_mb)}</span>
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex justify-end mt-6">
               <button
                 onClick={handleDownloadModalClose}
                 className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
