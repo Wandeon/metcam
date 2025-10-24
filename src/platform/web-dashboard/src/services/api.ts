@@ -390,4 +390,60 @@ export const apiService = {
     );
     return response.data;
   },
+
+  // Development API methods
+  async getDevStatus(): Promise<any> {
+    const response = await api.get('/dev/status');
+    return response.data;
+  },
+
+  async getGitStatus(): Promise<any> {
+    const response = await api.get('/dev/git-status');
+    return response.data;
+  },
+
+  async gitPull(): Promise<any> {
+    const response = await api.post('/dev/git-pull');
+    return response.data;
+  },
+
+  async buildDevUI(): Promise<any> {
+    const response = await api.post('/dev/build-ui');
+    return response.data;
+  },
+
+  async switchService(target: 'dev' | 'prod'): Promise<any> {
+    const response = await api.post('/dev/switch-service', { target });
+    return response.data;
+  },
+
+  async getServiceStatus(): Promise<any> {
+    const response = await api.get('/dev/service-status');
+    return response.data;
+  },
+
+  async deployToProduction(confirm: boolean): Promise<any> {
+    const response = await api.post('/dev/deploy-prod', { confirm });
+    return response.data;
+  },
+
+  async listBackups(): Promise<any> {
+    const response = await api.get('/dev/backups');
+    return response.data;
+  },
+
+  async rollback(backupName: string): Promise<any> {
+    const response = await api.post('/dev/rollback', { backup_name: backupName });
+    return response.data;
+  },
+
+  async getDevLogs(service: 'dev' | 'prod', lines: number = 100): Promise<any> {
+    const response = await api.get(`/dev/logs?service=${service}&lines=${lines}`);
+    return response.data;
+  },
+
+  async getSystemInfo(): Promise<any> {
+    const response = await api.get('/dev/system-info');
+    return response.data;
+  },
 };

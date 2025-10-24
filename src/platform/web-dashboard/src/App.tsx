@@ -7,8 +7,9 @@ import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Dashboard } from '@/pages/Dashboard';
 import { MatchesEnhanced as Matches } from '@/pages/MatchesEnhanced';
 import { Preview } from '@/pages/Preview';
+import { Development } from '@/pages/Development';
 import { Login } from '@/pages/Login';
-import { Video, Home, Film, Eye, LogOut, Menu, X } from 'lucide-react';
+import { Video, Home, Film, Eye, Code, LogOut, Menu, X } from 'lucide-react';
 
 function App() {
   const isAuthenticated = !!localStorage.getItem('access_token');
@@ -84,6 +85,12 @@ function App() {
                 label="Matches"
                 onClick={() => setSidebarOpen(false)}
               />
+              <NavLink
+                to="/development"
+                icon={<Code />}
+                label="Development"
+                onClick={() => setSidebarOpen(false)}
+              />
             </nav>
           </div>
 
@@ -107,6 +114,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/preview" element={<Preview />} />
             <Route path="/matches" element={<Matches />} />
+            <Route path="/development" element={<Development />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

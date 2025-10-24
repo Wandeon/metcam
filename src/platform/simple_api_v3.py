@@ -45,6 +45,9 @@ from recording_service import get_recording_service
 from preview_service import get_preview_service
 from pipeline_manager import pipeline_manager, PipelineMode
 
+# Import development router
+from dev_router import dev_router
+
 app = FastAPI(
     title="FootballVision Pro API v3",
     description="In-process GStreamer for instant, bulletproof operations",
@@ -59,6 +62,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include development router
+app.include_router(dev_router)
 
 # Clean up any stale locks from previous runs
 try:
