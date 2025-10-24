@@ -1,286 +1,57 @@
-# FootballVision Pro - Video Pipeline
+# Video Pipeline (v3)
 
-## Overview
-Complete video capture and recording pipeline for dual 4K camera football match recording on NVIDIA Jetson Orin Nano Super.
+This directory contains the in-process GStreamer pipeline implementation used by FootballVision Pro on Jetson Orin Nano devices.
 
-## Team Deliverables Complete ✓
+## Key Modules
 
-### W11 - Pipeline Architecture ✓
-- Master GStreamer pipeline design
-- Component integration interfaces
-- API specifications
-- Performance targets defined
+- `gstreamer_manager.py` – Singleton that owns the GLib main loop, manages pipeline lifecycle, and propagates bus events.
+- `pipeline_builders.py` – Generates canonical recording and preview pipeline strings (NV12 → videocrop → I420 → x264).
+- `recording_service.py` – Dual-camera recorder with 10 s protection, state persistence, and timestamped MP4 segments.
+- `preview_service.py` – Dual-camera HLS preview (`/dev/shm/hls/cam{N}.m3u8`) with per-camera control and restart support.
+- `camera_config_manager.py` – Loads and atomically persists `config/camera_config.json` values.
+- `shaders/` – Reserved for future GPU-based distortion correction (not used by the v3 CPU crop pipeline).
 
-### W12 - Camera Control ✓
-- libargus wrapper for IMX477 sensors
-- Sports-optimized exposure/gain control
-- Camera synchronization
-- Location: `camera-control/`
+## Current Pipelines
 
-### W13 - GStreamer Core ✓
-- Main pipeline implementation
-- NVMM buffer management (zero-copy)
-- Pipeline state machine
-- Error recovery mechanisms
-- Location: `gstreamer-core/`
+Both pipelines share the same deterministic crop and colorspace chain. The only differences are encoder bitrate/flags and the sink element.
 
-### W14 - NVENC Integration ✓
-- H.265 hardware encoder wrapper
-- Main10 profile configuration
-- Bitrate control (100 Mbps CBR)
-- Location: `nvenc-integration/`
-
-### W15 - Recording Manager ✓
-- Recording state machine
-- Metadata injection
-- Dual pipeline coordination
-- File management
-- Location: `recording-manager/`
-
-### W16 - Stream Synchronization ✓
-- Frame timestamp alignment
-- Drift detection/compensation
-- Sync accuracy: ±1 frame (33ms)
-- Location: `stream-sync/`
-
-### W17 - Preview Pipeline ✓
-- Low-res 720p preview stream
-- MJPEG over TCP (port 8554)
-- Resource isolation
-- Location: `preview-pipeline/`
-
-### W18 - Pipeline Monitor ✓
-- Frame drop detection
-- Performance metrics collection
-- Alert system
-- Health monitoring
-- Location: `pipeline-monitor/`
-
-### W19 - Storage Writer ✓
-- Optimized MP4 muxer
-- Write buffer management
-- Filesystem monitoring
-- Location: `storage-writer/`
-
-### W20 - Recovery System ✓
-- Crash recovery
-- State persistence
-- Partial recording salvage
-- Pipeline restart (<1 second)
-- Location: `recovery-system/`
-
-## Architecture
+### Recording
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│              FootballVision Pipeline                    │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  Camera 0 (IMX477)                Camera 1 (IMX477)     │
-│       ↓                                  ↓              │
-│  ┌──────────────┐                  ┌──────────────┐    │
-│  │ GStreamer    │                  │ GStreamer    │    │
-│  │ Pipeline #0  │                  │ Pipeline #1  │    │
-│  └──────┬───────┘                  └──────┬───────┘    │
-│         │                                 │             │
-│         │        ┌──────────────┐         │             │
-│         └───────▶│ Stream Sync  │◀────────┘             │
-│                  └──────┬───────┘                       │
-│                         │                               │
-│                  ┌──────▼───────┐                       │
-│                  │  Recording   │                       │
-│                  │  Manager     │                       │
-│                  └──────┬───────┘                       │
-│                         │                               │
-│              ┌──────────┼──────────┐                    │
-│              ↓          ↓          ↓                    │
-│         Storage    Monitor    Preview                   │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+nvarguscamerasrc (3840×2160 @ 30 fps NV12) →
+nvvidconv (NVMM → system memory) →
+videocrop (left=480, right=480, top=272, bottom=272) →
+videoconvert (NV12 → I420) →
+x264enc (12 Mbps, key-int=60, zerolatency) →
+h264parse (AVC stream-format) →
+splitmuxsink (10-minute MP4 segments: cam{N}_{timestamp}_%02d.mp4)
 ```
 
-## Build Instructions
-
-### Prerequisites
-```bash
-# On Jetson (production)
-sudo apt-get install -y \
-    build-essential cmake \
-    libgstreamer1.0-dev \
-    libgstreamer-plugins-base1.0-dev \
-    nvidia-l4t-gstreamer
-
-# Development (x86)
-sudo apt-get install -y build-essential cmake
-```
-
-### Build
-```bash
-cd src/video-pipeline
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-sudo make install
-```
-
-### Run Tests
-```bash
-# Individual component tests
-./camera-control/test_camera_control
-./gstreamer-core/test_gstreamer_core
-
-# Integration test (requires hardware)
-./footballvision-recorder game_test_20250930
-```
-
-## Usage
-
-### Basic Recording
-```bash
-# Start recording (runs until Ctrl+C)
-footballvision-recorder game_20250930_home_vs_away
-
-# View preview during recording
-ffplay tcp://localhost:8554
-```
-
-### API Usage
-```cpp
-#include <footballvision/interfaces.h>
-
-using namespace footballvision;
-
-RecordingAPI api;
-api.Initialize("/etc/footballvision/config.json");
-
-// Start recording
-api.StartRecording("game_20250930_1430", "/mnt/recordings");
-
-// ... match recording ...
-
-// Stop and get results
-auto result = api.StopRecording();
-std::cout << "Camera 0: " << result.camera0_path << std::endl;
-std::cout << "Camera 1: " << result.camera1_path << std::endl;
-```
-
-## Configuration
-
-### Camera Settings (Sports Optimized)
-- **Exposure**: 1/1000s to 1/2000s (freeze motion)
-- **Gain**: ISO 100-400 (daylight)
-- **White Balance**: Daylight (5500K) locked
-- **Edge Enhancement**: Disabled
-- **Noise Reduction**: Disabled (preserves detail)
-
-### Encoding Settings
-- **Codec**: H.265/HEVC
-- **Profile**: Main (Main10 ready)
-- **Resolution**: 4056×3040 @ 30fps
-- **Bitrate**: 100 Mbps CBR (120 Mbps peak)
-- **GOP**: 30 frames (1 second I-frame interval)
-- **Quality**: High (maxperf-enable=1)
-
-### Storage Requirements
-- **Per camera**: ~45 GB/hour @ 100 Mbps
-- **Dual cameras**: ~90 GB/hour
-- **150 min match**: ~225 GB total
-- **Recommended**: 512 GB NVMe SSD
-
-## Performance Targets
-
-| Metric | Target | Status |
-|--------|--------|--------|
-| Frame drops | 0 | ✓ |
-| Latency (preview) | <100ms | ✓ |
-| CPU usage | <20% | ✓ |
-| Memory usage | <1GB buffers | ✓ |
-| Startup time | <5s | ✓ |
-| Recovery time | <1s | ✓ |
-| Sync accuracy | ±1 frame (33ms) | ✓ |
-
-## Directory Structure
+### Preview
 
 ```
-src/video-pipeline/
-├── CMakeLists.txt              # Master build configuration
-├── README.md                   # This file
-├── main/
-│   └── recorder_main.cpp       # Main application
-├── pipeline-architecture/      # W11: Architecture & interfaces
-├── camera-control/             # W12: Camera wrapper
-├── gstreamer-core/             # W13: Pipeline core
-├── nvenc-integration/          # W14: Encoder
-├── recording-manager/          # W15: State management
-├── stream-sync/                # W16: Synchronization
-├── preview-pipeline/           # W17: Preview stream
-├── pipeline-monitor/           # W18: Monitoring
-├── storage-writer/             # W19: File I/O
-└── recovery-system/            # W20: Crash recovery
+nvarguscamerasrc (3840×2160 @ 30 fps NV12) →
+nvvidconv (NVMM → system memory) →
+videocrop (same trims as recording) →
+videoconvert (NV12 → I420) →
+x264enc (3 Mbps, byte-stream=true) →
+h264parse (config-interval=1) →
+hlssink2 (/dev/shm/hls/cam{N}.m3u8, 2 s segments)
 ```
 
-## Troubleshooting
+## Runtime Behaviour
 
-### Camera Not Found
-```bash
-# Check camera detection
-ls -l /dev/video*
-v4l2-ctl --list-devices
+- Pipelines are created and started via `GStreamerManager` to avoid subprocess overhead.
+- Recording and preview cannot run simultaneously; the API stops preview automatically before recording starts.
+- Recording segments are written to `/mnt/recordings/<match>/segments/` and roll every 600 s.
+- Preview segments live in `/dev/shm/hls/` (tmpfs) and should be bind-mounted or symlinked to `/tmp/hls` for HTTP serving.
 
-# Verify device tree
-dmesg | grep imx477
-```
+## Development Tips
 
-### Frame Drops
-```bash
-# Check GStreamer debug
-GST_DEBUG=3 footballvision-recorder game_test
+- Use `GStreamerManager.list_pipelines()` from a Python shell to inspect active pipelines.
+- `pipeline_builders.py` should remain the single source of truth for crop values and encoder parameters; update docs alongside any changes.
+- When adding new configuration fields, extend `camera_config_manager.py` and expose them through the API/UI layers.
 
-# Monitor GPU usage
-tegrastats
+## Legacy Files
 
-# Check disk I/O
-iostat -x 1
-```
-
-### Sync Issues
-```bash
-# Verify both cameras operational
-gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! fakesink
-gst-launch-1.0 nvarguscamerasrc sensor-id=1 ! fakesink
-```
-
-## Future Enhancements
-
-- [ ] Hardware frame trigger for <1ms sync
-- [ ] 10-bit color depth recording
-- [ ] HLS streaming for preview
-- [ ] Multi-camera support (>2 cameras)
-- [ ] Real-time AI processing integration
-- [ ] Cloud upload integration
-
-## Team Members
-
-- **W11**: Pipeline Architecture Lead
-- **W12**: Camera Control Specialist
-- **W13**: GStreamer Expert
-- **W14**: NVENC Integration
-- **W15**: Recording Manager
-- **W16**: Synchronization Specialist
-- **W17**: Preview Pipeline
-- **W18**: Monitoring & Metrics
-- **W19**: Storage Optimization
-- **W20**: Recovery & Reliability
-
-## License
-
-Proprietary - FootballVision Pro
-
-## Contact
-
-For support: support@footballvision.pro
-
----
-**Build Date**: 2025-09-30
-**Version**: 1.0.0
-**Status**: Production Ready ✓
+Legacy shell scripts and managers (`recording_manager_enhanced.py`, `record_dual_*`) remain in the repository for reference only. The v3 deployment no longer invokes them.

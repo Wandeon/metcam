@@ -1,159 +1,114 @@
-import React, { useState, useEffect } from 'react';
-import { Film, Download, Video, Upload, RefreshCw } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Download, Film, RefreshCw, Trash2 } from 'lucide-react';
+
+interface RecordingEntry {
+  file: string;
+  size_mb: number;
+  created_at?: number;
+}
 
 interface Match {
   id: string;
-  files: string[];
-  sidebyside_exists?: boolean;
+  files: RecordingEntry[];
   date: string;
   total_size_mb: number;
-  upload_status?: 'uploading' | 'completed' | 'failed' | 'pending';
-  upload_progress?: number;
 }
+
+const formatLabel = (file: string) => {
+  if (file.includes('cam0')) return 'Camera 0';
+  if (file.includes('cam1')) return 'Camera 1';
+  return file;
+};
 
 export const Matches: React.FC = () => {
   const [matches, setMatches] = useState<Match[]>([]);
-  const [processing, setProcessing] = useState<{ [key: string]: any }>({});
-  const [uploading, setUploading] = useState<{ [key: string]: any }>({});
-
-  useEffect(() => {
-    loadMatches();
-
-    // Poll for processing/upload status
-    const interval = setInterval(() => {
-      updateJobStatuses();
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, []);
+  const [loading, setLoading] = useState(true);
+  const [downloadModalMatchId, setDownloadModalMatchId] = useState<string | null>(null);
+  const [deletingMatchId, setDeletingMatchId] = useState<string | null>(null);
 
   const loadMatches = async () => {
     try {
-      // Get list of recording files
       const response = await fetch('/api/v1/recordings');
       const data = await response.json();
 
-      // Get upload status from activity log
-      const activityResponse = await fetch('/api/v1/activity/?limit=200');
-      const activityData = await activityResponse.json();
-
-      // Group by match ID
-      const matchMap: { [key: string]: Match } = {};
-
-      if (data.recordings) {
-        Object.keys(data.recordings).forEach((matchId) => {
-          const files = data.recordings[matchId];
-          const totalSize = files.reduce((sum: number, f: any) => sum + (f.size_mb || 0), 0);
-
-          // Check upload status from activity log
-          const uploadEvents = activityData.events?.filter((e: any) =>
-            e.match_id === matchId || e.details?.match_id === matchId
-          ) || [];
-
-          let upload_status: Match['upload_status'] = 'pending';
-          if (uploadEvents.some((e: any) => e.event_type === 'upload_completed')) {
-            upload_status = 'completed';
-          } else if (uploadEvents.some((e: any) => e.event_type === 'upload_started')) {
-            upload_status = 'uploading';
-          } else if (uploadEvents.some((e: any) => e.severity === 'error')) {
-            upload_status = 'failed';
-          }
-
-          matchMap[matchId] = {
-            id: matchId,
-            files: files.map((f: any) => f.file || f.filename || f),
-            sidebyside_exists: files.some((f: any) =>
-              (f.file || f.filename || f).includes('_sidebyside.mp4')
-            ),
-            date: files[0]?.created_at ? new Date(files[0].created_at * 1000).toISOString() : new Date().toISOString(),
-            total_size_mb: totalSize,
-            upload_status
-          };
-        });
+      if (!data.recordings) {
+        setMatches([]);
+        return;
       }
 
-      setMatches(Object.values(matchMap));
+      const matchList: Match[] = Object.entries(data.recordings).map(
+        ([matchId, files]) => {
+          const entries: RecordingEntry[] = (files as any[]).map((f: any) => ({
+            file: f.file || f.filename || f,
+            size_mb: f.size_mb || 0,
+            created_at: f.created_at,
+          }));
+
+          const totalSize = entries.reduce((sum, entry) => sum + entry.size_mb, 0);
+          const firstTimestamp = entries[0]?.created_at
+            ? new Date(entries[0].created_at * 1000).toISOString()
+            : new Date().toISOString();
+
+          return {
+            id: matchId,
+            files: entries,
+            date: firstTimestamp,
+            total_size_mb: totalSize,
+          };
+        }
+      );
+
+      setMatches(matchList.sort((a, b) => (a.date > b.date ? -1 : 1)));
     } catch (error) {
       console.error('Failed to load matches:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const updateJobStatuses = async () => {
-    // Update processing jobs
-    for (const jobId of Object.keys(processing)) {
-      try {
-        const response = await fetch(`/api/v1/processing/status/${jobId}`);
-        const status = await response.json();
-        setProcessing(prev => ({ ...prev, [jobId]: status }));
+  useEffect(() => {
+    loadMatches();
+    const interval = setInterval(loadMatches, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
-        if (status.status === 'completed' || status.status === 'failed') {
-          // Reload matches to show new sidebyside file
-          setTimeout(loadMatches, 1000);
-        }
-      } catch (e) {
-        // Job might not exist yet
-      }
-    }
-
-    // Update upload jobs
-    for (const jobId of Object.keys(uploading)) {
-      try {
-        const response = await fetch(`/api/v1/upload/status/${jobId}`);
-        const status = await response.json();
-        setUploading(prev => ({ ...prev, [jobId]: status }));
-      } catch (e) {
-        // Job might not exist yet
-      }
-    }
+  const handleDownloadClick = (matchId: string) => {
+    setDownloadModalMatchId(matchId);
   };
 
-  const startProcessing = async (matchId: string) => {
+  const handleDownloadModalClose = () => {
+    setDownloadModalMatchId(null);
+  };
+
+  const handleDeleteClick = async (matchId: string) => {
+    if (!confirm(`Are you sure you want to delete recording "${matchId}"?`)) {
+      return;
+    }
+
+    setDeletingMatchId(matchId);
     try {
-      const response = await fetch('/api/v1/processing/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ match_id: matchId })
+      const response = await fetch(`/api/v1/recordings/${matchId}`, {
+        method: 'DELETE',
       });
 
-      const data = await response.json();
-      setProcessing(prev => ({
-        ...prev,
-        [data.job_id]: { status: 'starting', progress: 0, match_id: matchId }
-      }));
+      if (response.ok) {
+        setMatches(prev => prev.filter(m => m.id !== matchId));
+      } else {
+        alert('Failed to delete recording');
+      }
     } catch (error) {
-      alert(`Failed to start processing: ${error}`);
+      console.error('Failed to delete recording:', error);
+      alert('Failed to delete recording');
+    } finally {
+      setDeletingMatchId(null);
     }
   };
 
-  const startUpload = async (matchId: string) => {
-    const filePath = `/mnt/recordings/${matchId}_sidebyside.mp4`;
-
-    try {
-      const response = await fetch('/api/v1/upload/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_path: filePath })
-      });
-
-      const data = await response.json();
-      setUploading(prev => ({
-        ...prev,
-        [data.job_id]: { status: 'starting', progress: 0, match_id: matchId }
-      }));
-    } catch (error) {
-      alert(`Failed to start upload: ${error}`);
-    }
-  };
-
-  const getProcessingStatus = (matchId: string) => {
-    const job = Object.values(processing).find((j: any) => j.match_id === matchId);
-    return job;
-  };
-
-  const getUploadStatus = (matchId: string) => {
-    const job = Object.values(uploading).find((j: any) => j.match_id === matchId);
-    return job;
-  };
+  if (loading) {
+    return (
+      <div className="p-4 md:p-6 animate-pulse">Loading recordings…</div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-6">
@@ -168,106 +123,86 @@ export const Matches: React.FC = () => {
         </button>
       </div>
 
+      {downloadModalMatchId && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+          onClick={handleDownloadModalClose}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4">Download Recording</h3>
+            <p className="text-gray-600 mb-4">
+              <strong>{downloadModalMatchId}</strong>
+            </p>
+            <div className="flex flex-col gap-2">
+              {matches.find(m => m.id === downloadModalMatchId)?.files.map((entry) => (
+                <a
+                  key={entry.file}
+                  href={`/recordings/${entry.file}`}
+                  download
+                  className="flex items-center justify-between px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
+                >
+                  <span className="flex items-center">
+                    <Download className="w-4 h-4 mr-2" />
+                    {formatLabel(entry.file)}
+                  </span>
+                  <span className="text-xs opacity-75">{entry.size_mb.toFixed(1)} MB</span>
+                </a>
+              ))}
+            </div>
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={handleDownloadModalClose}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4">
-        {matches.map((match) => {
-          const procStatus = getProcessingStatus(match.id);
-          const uploadStatus = getUploadStatus(match.id);
+        {matches.map((match) => (
+          <div key={match.id} className="bg-white rounded-lg shadow p-4 md:p-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold">{match.id}</h3>
+                <p className="text-gray-600 text-sm">
+                  {new Date(match.date).toLocaleDateString()} at {new Date(match.date).toLocaleTimeString()}
+                </p>
+                <p className="text-gray-500 text-xs mt-1">
+                  {match.files.length} files • {match.total_size_mb.toFixed(1)} MB total
+                </p>
+              </div>
 
-          return (
-            <div key={match.id} className="bg-white rounded-lg shadow p-4 md:p-6">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-semibold">{match.id}</h3>
-                  <p className="text-gray-600 text-sm">
-                    {new Date(match.date).toLocaleDateString()} at {new Date(match.date).toLocaleTimeString()}
-                  </p>
-                  <p className="text-gray-500 text-xs mt-1">
-                    {match.files.length} files • {match.total_size_mb.toFixed(1)} MB total
-                    {match.sidebyside_exists && ' • Side-by-side ✓'}
-                  </p>
-                  {match.upload_status && (
-                    <div className="flex items-center gap-2 mt-2">
-                      {match.upload_status === 'uploading' && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800">
-                          <Upload className="w-3 h-3 mr-1 animate-pulse" />
-                          Uploading to VPS-02
-                        </span>
-                      )}
-                      {match.upload_status === 'completed' && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
-                          ✓ Uploaded to VPS-02
-                        </span>
-                      )}
-                      {match.upload_status === 'failed' && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-red-100 text-red-800">
-                          ✗ Upload failed
-                        </span>
-                      )}
-                      {match.upload_status === 'pending' && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-600">
-                          Pending upload
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => handleDownloadClick(match.id)}
+                  className="flex items-center px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
+                >
+                  <Download className="w-4 h-4 mr-1" />
+                  Download
+                </button>
 
-                <div className="flex flex-wrap gap-2">
-                  {/* Download Buttons */}
-                  {match.files.map(file => (
-                    <a
-                      key={file}
-                      href={`/recordings/${file}`}
-                      download
-                      className="flex items-center px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
-                    >
-                      <Download className="w-4 h-4 mr-1" />
-                      {file.includes('cam0') ? 'Cam0' : file.includes('cam1') ? 'Cam1' : 'Side-by-side'}
-                    </a>
-                  ))}
-
-                  {/* Process Button */}
-                  {!match.sidebyside_exists && !procStatus && (
-                    <button
-                      onClick={() => startProcessing(match.id)}
-                      className="flex items-center px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm touch-manipulation"
-                    >
-                      <Video className="w-4 h-4 mr-1" />
-                      Create Side-by-Side
-                    </button>
-                  )}
-
-                  {/* Processing Status */}
-                  {procStatus && procStatus.status !== 'completed' && (
-                    <div className="flex items-center px-3 py-2 bg-yellow-100 text-yellow-800 rounded text-sm">
-                      <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
-                      {procStatus.progress}% - {procStatus.message}
-                    </div>
-                  )}
-
-                  {/* Upload Button */}
-                  {match.sidebyside_exists && !uploadStatus && (
-                    <button
-                      onClick={() => startUpload(match.id)}
-                      className="flex items-center px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm touch-manipulation"
-                    >
-                      <Upload className="w-4 h-4 mr-1" />
-                      Upload to Website
-                    </button>
-                  )}
-
-                  {/* Upload Status */}
-                  {uploadStatus && uploadStatus.status !== 'completed' && (
-                    <div className="flex items-center px-3 py-2 bg-green-100 text-green-800 rounded text-sm">
-                      <Upload className="w-4 h-4 mr-1 animate-pulse" />
-                      {uploadStatus.progress}% - {uploadStatus.message}
-                    </div>
-                  )}
-                </div>
+                <button
+                  onClick={() => handleDeleteClick(match.id)}
+                  disabled={deletingMatchId === match.id}
+                  className={`flex items-center px-3 py-2 rounded text-sm touch-manipulation ${
+                    deletingMatchId === match.id
+                      ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                      : 'bg-red-600 text-white hover:bg-red-700'
+                  }`}
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  {deletingMatchId === match.id ? 'Deleting...' : 'Delete'}
+                </button>
               </div>
             </div>
-          );
-        })}
+          </div>
+        ))}
 
         {matches.length === 0 && (
           <div className="text-center py-12 text-gray-500">

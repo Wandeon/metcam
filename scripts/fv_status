@@ -1,0 +1,36 @@
+#!/bin/bash
+# Quick system status check
+
+echo "=== FootballVision Pro Status ==="
+echo ""
+echo "System:"
+echo "  Uptime: $(uptime -p)"
+echo "  Power Mode: $(nvpmodel -q | grep "NV Power Mode")"
+echo "  CPU Freq: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) Hz"
+echo "  Temperature: $(echo "scale=1; $(cat /sys/class/thermal/thermal_zone0/temp) / 1000" | bc)°C"
+echo ""
+echo "Storage:"
+df -h /mnt/recordings | tail -1 | awk '{print "  Used: "$3" / "$2" ("$5" full)"}'
+echo "  Recordings: $(find /mnt/recordings -maxdepth 1 -type d | wc -l) matches"
+echo ""
+echo "Services:"
+echo -n "  API: "
+systemctl is-active footballvision-api-enhanced
+echo ""
+echo "Recording:"
+curl -s http://localhost/api/v1/status 2>/dev/null | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if data.get('status') == 'recording':
+        print(f'  Status: RECORDING')
+        print(f'  Match: {data.get(\"match_id\")}')
+        print(f'  Duration: {int(data.get(\"duration_seconds\", 0)) // 60} minutes')
+    else:
+        print('  Status: Idle')
+except:
+    print('  Status: Unknown (API error)')
+" 2>/dev/null
+echo ""
+echo "Recent Alerts:"
+tail -5 /var/log/footballvision/system/alerts.log 2>/dev/null | sed 's/^/  /'

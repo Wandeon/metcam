@@ -40,11 +40,26 @@ export const Dashboard: React.FC = () => {
 
     setIsStarting(true);
     try {
+      // Check if preview is running and stop it first
+      try {
+        const previewStatus = await apiService.getPreviewStatus();
+        // The streaming property is correctly set from preview_active in the API service
+        if (previewStatus.streaming) {
+          console.log('Preview is running, stopping it before starting recording...');
+          await apiService.stopPreview();
+          // Longer delay to ensure preview is fully stopped and lock is released
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+      } catch (previewErr) {
+        // If we can't check preview status, continue anyway
+        console.log('Could not check preview status, continuing with recording start');
+      }
+
       await apiService.startRecording({
         match_id: matchId,
         resolution: '1920x1080',
-        fps: 60,
-        bitrate_kbps: 12000,
+        fps: 30,
+        bitrate_kbps: 45000,
       });
       await fetchStatus();
       setMatchId('');
@@ -220,7 +235,7 @@ export const Dashboard: React.FC = () => {
             <button
               onClick={handleStartRecording}
               disabled={isStarting || !matchId.trim()}
-              className="w-full bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
+              className="w-full md:max-w-md md:mx-auto bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
             >
               {isStarting ? 'Starting...' : 'Start Recording'}
             </button>
@@ -228,13 +243,13 @@ export const Dashboard: React.FC = () => {
             <div className="text-sm text-gray-600 bg-gray-50 p-4 rounded-lg">
               <p className="font-semibold mb-2">Recording Settings:</p>
               <ul className="space-y-1">
-                <li>• Resolution: 1920x1080 @ 60fps (native sensor output)</li>
-                <li>• Encoder: H.264 x264 software (ultrafast profile, ~30 fps output)</li>
-                <li>• Bitrate: 12 Mbps per camera (constant target)</li>
-                <li>• Segments: 5-minute MP4 files (crash-safe)</li>
-                <li>• Live preview runs separately via Preview tab</li>
-                <li>• Storage: ~100 GB per 150min session (both cameras)</li>
-                <li>• Auto-upload: VPS-02 after 10 min delay</li>
+                <li>• Resolution: 2880×1620 @ 30fps (VIC GPU cropped from 4K)</li>
+                <li>• Encoder: H.264 NVENC hardware accelerated</li>
+                <li>• Bitrate: 12 Mbps per camera</li>
+                <li>• Segments: 10-minute MKV files</li>
+                <li>• Protection: 10 second minimum recording duration</li>
+                <li>• Storage: ~180 MB/min = 27 GB per 150min session</li>
+                <li>• Location: /mnt/recordings/[match_id]/segments/</li>
               </ul>
             </div>
           </div>
@@ -252,7 +267,7 @@ export const Dashboard: React.FC = () => {
             <button
               onClick={handleStopRecording}
               disabled={isStopping}
-              className={`w-full font-semibold py-3 rounded-lg transition-colors ${
+              className={`w-full md:max-w-md md:mx-auto font-semibold py-3 rounded-lg transition-colors ${
                 confirmStop
                   ? 'bg-orange-500 hover:bg-orange-600 text-white animate-pulse'
                   : 'bg-red-500 hover:bg-red-600 text-white'

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { apiService } from '@/services/api';
 import { CameraPreview } from '@/components/CameraPreview';
-import { Play, Square, AlertCircle, Eye } from 'lucide-react';
+import { CameraConfigControls } from '@/components/CameraConfigControls';
+import { Play, Square, AlertCircle, Eye, Settings } from 'lucide-react';
+// v2.0 - 30fps @ 3Mbps smooth streaming (native 1080p60 sensor mode)
 
 export const Preview: React.FC = () => {
   const [previewStatus, setPreviewStatus] = useState<any>(null);
@@ -9,6 +11,9 @@ export const Preview: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [showControls, setShowControls] = useState(false);
+  const [streamKey, setStreamKey] = useState(0); // Force HLS player reload
+  const [isReloading, setIsReloading] = useState(false); // Hide players while restarting
 
   const fetchPreviewStatus = async () => {
     try {
@@ -32,10 +37,49 @@ export const Preview: React.FC = () => {
   const handleStartPreview = async () => {
     setIsStarting(true);
     try {
-      await apiService.startPreview();
+      // Check if recording is active
+      const status = await apiService.getStatus();
+      if (status.recording) {
+        setError('Cannot start preview while recording is active. Please stop recording first.');
+        setTimeout(() => setError(null), 5000);
+        return;
+      }
+
+      // Start preview in NORMAL mode (same as recording: GPU crop + barrel correction + rotation)
+      await apiService.startPreview({ mode: 'normal' });
       await fetchPreviewStatus();
+      // Wait for HLS files to be ready before showing players
+      await new Promise(resolve => setTimeout(resolve, 6000));
+      setStreamKey(prev => prev + 1); // Force HLS player reload
     } catch (err) {
-      alert('Failed to start preview');
+      setError('Failed to start preview');
+      setTimeout(() => setError(null), 5000);
+      console.error(err);
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
+  const handleStartCalibration = async () => {
+    setIsStarting(true);
+    try {
+      // Check if recording is active
+      const status = await apiService.getStatus();
+      if (status.recording) {
+        setError('Cannot start calibration while recording is active. Please stop recording first.');
+        setTimeout(() => setError(null), 5000);
+        return;
+      }
+
+      // Start preview in CALIBRATION mode (center 50% crop, 25% FOV, native 4K sharpness)
+      await apiService.startPreview({ mode: 'calibration' });
+      await fetchPreviewStatus();
+      // Wait for HLS files to be ready before showing players
+      await new Promise(resolve => setTimeout(resolve, 6000));
+      setStreamKey(prev => prev + 1); // Force HLS player reload
+    } catch (err) {
+      setError('Failed to start calibration');
+      setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
       setIsStarting(false);
@@ -48,7 +92,8 @@ export const Preview: React.FC = () => {
       await apiService.stopPreview();
       await fetchPreviewStatus();
     } catch (err) {
-      alert('Failed to stop preview');
+      setError('Failed to stop preview');
+      setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
       setIsStopping(false);
@@ -69,7 +114,7 @@ export const Preview: React.FC = () => {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Camera Preview</h1>
-        <p className="text-gray-600 mt-1">Full-frame live preview (1920x1080 @ 10fps)</p>
+        <p className="text-gray-600 mt-1">Live preview - Same FOV as recording (GPU crop + barrel correction + rotation)</p>
       </div>
 
       {error && (
@@ -99,27 +144,49 @@ export const Preview: React.FC = () => {
         {!isStreaming ? (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
-              Start the preview stream to see live camera feeds at Full HD resolution.
-              This allows you to verify camera positioning, focus, and lighting before recording.
+              Start the preview stream to see what will be recorded. Preview shows the EXACT same field of view as your recordings.
             </p>
 
-            <button
-              onClick={handleStartPreview}
-              disabled={isStarting}
-              className="w-full bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors flex items-center justify-center"
-            >
-              <Play className="w-5 h-5 mr-2" />
-              {isStarting ? 'Starting Preview...' : 'Start Preview Stream'}
-            </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <button
+                onClick={handleStartPreview}
+                disabled={isStarting}
+                className="bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors flex items-center justify-center"
+              >
+                <Play className="w-5 h-5 mr-2" />
+                {isStarting ? 'Starting...' : 'Start Recording Preview'}
+              </button>
 
-            <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
-              <p className="font-semibold mb-1">Preview Settings:</p>
-              <ul className="space-y-1">
-                <li>• Resolution: 1920x1080 (Full HD)</li>
-                <li>• Frame rate: 10 fps (throttled)</li>
-                <li>• Bitrate: 4 Mbps per camera</li>
-                <li>• Format: HLS stream (H.264)</li>
-              </ul>
+              <button
+                onClick={handleStartCalibration}
+                disabled={isStarting}
+                className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors flex items-center justify-center"
+              >
+                <Eye className="w-5 h-5 mr-2" />
+                {isStarting ? 'Starting...' : 'Start Calibration Stream'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm">
+                <p className="font-semibold mb-2">📹 Recording Preview:</p>
+                <ul className="space-y-1 text-xs">
+                  <li>• 2880×1620 @ 30fps</li>
+                  <li>• GPU crop (56% FOV)</li>
+                  <li>• Barrel correction + rotation</li>
+                  <li>• SAME as recordings</li>
+                </ul>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
+                <p className="font-semibold mb-2">🎯 Calibration Mode:</p>
+                <ul className="space-y-1 text-xs">
+                  <li>• Center 50% crop (1920×1080)</li>
+                  <li>• 25% FOV @ 30fps</li>
+                  <li>• 8 Mbps native 4K sharpness</li>
+                  <li>• For focus check</li>
+                </ul>
+              </div>
             </div>
           </div>
         ) : (
@@ -136,32 +203,103 @@ export const Preview: React.FC = () => {
         )}
       </div>
 
-      {isStreaming && previewStatus?.cam0_url && previewStatus?.cam1_url && (
+      {isStreaming && previewStatus?.cam0_url && previewStatus?.cam1_url && !isReloading && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <CameraPreview
+            key={`cam0-${streamKey}`}
             cameraId={0}
             streamUrl={previewStatus.cam0_url}
             title="Camera 0"
+            resolution={previewStatus.output_resolution || '1920x1080'}
+            framerate={previewStatus.framerate || 30}
           />
           <CameraPreview
+            key={`cam1-${streamKey}`}
             cameraId={1}
             streamUrl={previewStatus.cam1_url}
             title="Camera 1"
+            resolution={previewStatus.output_resolution || '1920x1080'}
+            framerate={previewStatus.framerate || 30}
           />
         </div>
       )}
 
-      {isStreaming && (
-        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm">
-          <p className="font-semibold mb-1">⚠️ Important Notes:</p>
-          <ul className="space-y-1">
-            <li>• Preview stream uses Full HD (1920x1080) at 10fps</li>
-            <li>• Stop preview before starting recording to free camera resources</li>
-            <li>• Preview has ~2-4 second latency (normal for HLS)</li>
-            <li>• Remove lens caps and ensure adequate lighting</li>
-          </ul>
+      {isStreaming && isReloading && (
+        <div className="p-12 text-center bg-gray-100 rounded-lg">
+          <div className="text-gray-600 text-lg mb-2">Applying new camera configuration...</div>
+          <div className="text-gray-500 text-sm">Preview will restart in a moment</div>
         </div>
       )}
+
+      {isStreaming && (
+        <div className={`px-4 py-3 rounded-lg text-sm ${
+          previewStatus?.mode === 'calibration'
+            ? 'bg-blue-50 border border-blue-200 text-blue-800'
+            : 'bg-yellow-50 border border-yellow-200 text-yellow-800'
+        }`}>
+          {previewStatus?.mode === 'calibration' ? (
+            <>
+              <p className="font-semibold mb-1">🎯 Calibration Mode Active:</p>
+              <ul className="space-y-1">
+                <li>• <strong>1920×1080 @ 30fps</strong> - Native 4K center crop (25% FOV)</li>
+                <li>• <strong>8 Mbps</strong> - High quality encoding for maximum detail</li>
+                <li>• <strong>Center 50% each axis</strong> - Native 4K pixels, 4× sharper than downscaled preview</li>
+                <li>• Use this mode to fine-tune camera focus and check image quality</li>
+                <li>• Stream will stop when you start recording</li>
+              </ul>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold mb-1">📹 Recording Preview Active:</p>
+              <ul className="space-y-1">
+                <li>• <strong>2880×1620 @ 30fps</strong> - Same resolution as recordings</li>
+                <li>• <strong>GPU crop (56% FOV)</strong> - Same field of view as recordings</li>
+                <li>• <strong>Barrel correction + rotation</strong> - Same transformations as recordings</li>
+                <li>• What you see is what gets recorded</li>
+                <li>• Stream will stop automatically when you start recording</li>
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Camera Configuration Controls */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center">
+            <Settings className="w-6 h-6 text-gray-700 mr-2" />
+            <h2 className="text-xl font-semibold">Camera Configuration</h2>
+          </div>
+          <button
+            onClick={() => setShowControls(!showControls)}
+            className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition-colors"
+          >
+            {showControls ? 'Hide Controls' : 'Show Controls'}
+          </button>
+        </div>
+
+        {showControls && (
+          <CameraConfigControls onApply={async () => {
+            // Hide video players to destroy old HLS connections
+            setIsReloading(true);
+
+            // Wait a bit for old players to fully destroy
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // Fetch updated status (backend has restarted preview)
+            await fetchPreviewStatus();
+
+            // Wait for HLS segments to be created (measured: 5+ seconds needed)
+            await new Promise(resolve => setTimeout(resolve, 6000));
+
+            // Increment key to force new components with fresh HLS players
+            setStreamKey(prev => prev + 1);
+
+            // Show video players again
+            setIsReloading(false);
+          }} />
+        )}
+      </div>
     </div>
   );
 };
