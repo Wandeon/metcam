@@ -40,6 +40,12 @@ const formatLabel = (file: string) => {
   return file;
 };
 
+const getCameraKey = (file: string): 'cam0' | 'cam1' | 'unknown' => {
+  if (file.includes('cam0')) return 'cam0';
+  if (file.includes('cam1')) return 'cam1';
+  return 'unknown';
+};
+
 const formatSize = (mb: number) => {
   if (mb >= 1000) {
     return `${(mb / 1024).toFixed(2)} GB`;
@@ -47,9 +53,36 @@ const formatSize = (mb: number) => {
   return `${mb.toFixed(1)} MB`;
 };
 
-const formatTimestamp = (timestamp: number) => {
+const getFileFormat = (file?: string) => {
+  if (!file) return 'Unknown';
+  const cleanFile = file.split('?')[0];
+  const parts = cleanFile.split('.');
+  if (parts.length < 2) return 'Unknown';
+  return parts.pop()?.toUpperCase() ?? 'Unknown';
+};
+
+const formatFullTimestamp = (timestamp?: number) => {
+  if (!timestamp) return 'Unknown';
   const date = new Date(timestamp * 1000);
-  return date.toLocaleTimeString();
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+};
+
+const formatDurationFromMinutes = (minutes?: number) => {
+  if (!minutes) return null;
+  const totalSeconds = Math.round(minutes * 60);
+  const hours = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${mins.toString().padStart(2, '0')}m`;
+  }
+
+  if (mins > 0) {
+    return `${mins}m ${seconds.toString().padStart(2, '0')}s`;
+  }
+
+  return `${seconds}s`;
 };
 
 export const Matches: React.FC = () => {
@@ -122,6 +155,15 @@ export const Matches: React.FC = () => {
 
   const handleCameraClick = async (matchId: string, camera: 'cam0' | 'cam1') => {
     setSegmentModal({ matchId, camera });
+
+    if (segmentDetails && segmentDetails.match_id === matchId) {
+      return;
+    }
+
+    if (segmentDetails && segmentDetails.match_id !== matchId) {
+      setSegmentDetails(null);
+    }
+
     setLoadingSegments(true);
 
     try {
@@ -173,9 +215,25 @@ export const Matches: React.FC = () => {
   }
 
   const currentMatch = downloadModalMatchId ? matches.find(m => m.id === downloadModalMatchId) : null;
+  const cameraEntries = currentMatch?.files ?? [];
+  const cameraOptions = cameraEntries
+    .map((entry) => ({ camera: getCameraKey(entry.file), entry }))
+    .filter((item): item is { camera: 'cam0' | 'cam1'; entry: RecordingEntry } => item.camera === 'cam0' || item.camera === 'cam1');
+  const cameraEntryMap = new Map(cameraOptions.map(option => [option.camera, option.entry]));
+
   const currentSegments = segmentModal && segmentDetails
     ? segmentDetails[segmentModal.camera]
     : [];
+
+  const availableSegmentCameras = segmentDetails
+    ? (['cam0', 'cam1'] as const).filter((cam) => (segmentDetails[cam]?.length ?? 0) > 0)
+    : cameraOptions.map(option => option.camera);
+  const uniqueSegmentCameras = Array.from(new Set(availableSegmentCameras)) as Array<'cam0' | 'cam1'>;
+
+  const activeCameraEntry = segmentModal ? cameraEntryMap.get(segmentModal.camera) : undefined;
+  const cameraDurationEstimate = activeCameraEntry?.segment_count && segmentDetails?.segment_duration_minutes
+    ? formatDurationFromMinutes(activeCameraEntry.segment_count * segmentDetails.segment_duration_minutes)
+    : null;
 
   return (
     <div className="p-4 md:p-6">
@@ -205,33 +263,53 @@ export const Matches: React.FC = () => {
               <strong>{downloadModalMatchId}</strong>
             </p>
 
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3">
               {currentMatch?.files.map((entry) => {
                 const isSegmented = entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1);
-                const camera = entry.file.includes('cam0') ? 'cam0' : 'cam1';
+                const camera = getCameraKey(entry.file);
+                const format = getFileFormat(entry.filename || entry.file);
+                const recordedAt = formatFullTimestamp(entry.created_at);
+                const segmentLabel = isSegmented && entry.segment_count
+                  ? `${entry.segment_count} segments`
+                  : 'Single file';
 
                 return (
                   <button
                     key={entry.file}
-                    onClick={() => isSegmented
-                      ? handleCameraClick(downloadModalMatchId, camera)
-                      : window.location.href = `/recordings/${downloadModalMatchId}/segments/${entry.file}`
-                    }
-                    className="flex items-center justify-between px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
+                    onClick={() => {
+                      if (isSegmented && (camera === 'cam0' || camera === 'cam1')) {
+                        handleCameraClick(downloadModalMatchId, camera);
+                      } else {
+                        window.location.href = `/recordings/${downloadModalMatchId}/segments/${entry.file}`;
+                      }
+                    }}
+                    className="flex flex-col gap-3 px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-left touch-manipulation"
                   >
-                    <span className="flex items-center">
-                      <Download className="w-4 h-4 mr-2" />
-                      {formatLabel(entry.file)}
-                      {isSegmented && entry.segment_count && (
-                        <span className="ml-2 px-2 py-0.5 bg-blue-500 rounded text-xs">
-                          {entry.segment_count} segments
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center text-sm font-semibold">
+                          <Download className="w-4 h-4 mr-2" />
+                          {formatLabel(entry.file)}
+                        </div>
+                        <div className="text-xs text-gray-200 mt-1 break-all">
+                          {entry.filename || entry.file}
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-gray-200">
+                        <div className="font-semibold text-sm">{formatSize(entry.size_mb)}</div>
+                        <div className="mt-1">{format}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 text-[11px] text-gray-200">
+                      <span className="px-2 py-0.5 bg-gray-500 bg-opacity-40 rounded">{segmentLabel}</span>
+                      <span className="px-2 py-0.5 bg-gray-500 bg-opacity-40 rounded">Captured {recordedAt}</span>
+                      {isSegmented && (camera === 'cam0' || camera === 'cam1') && (
+                        <span className="px-2 py-0.5 bg-blue-500 bg-opacity-60 rounded inline-flex items-center">
+                          View segments <ChevronRight className="w-3 h-3 ml-1" />
                         </span>
                       )}
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <span className="text-xs opacity-75">{formatSize(entry.size_mb)}</span>
-                      {isSegmented && <ChevronRight className="w-4 h-4" />}
-                    </span>
+                    </div>
                   </button>
                 );
               })}
@@ -259,18 +337,38 @@ export const Matches: React.FC = () => {
             className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center mb-4">
-              <button
-                onClick={handleBackToCamera}
-                className="mr-3 p-1 hover:bg-gray-100 rounded"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <div>
-                <h3 className="text-xl font-bold">
-                  {segmentModal.camera === 'cam0' ? 'Camera 0' : 'Camera 1'} - Segments
-                </h3>
-                <p className="text-sm text-gray-600">{segmentModal.matchId}</p>
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between mb-4">
+              <div className="flex items-start gap-3">
+                <button
+                  onClick={handleBackToCamera}
+                  className="p-1 hover:bg-gray-100 rounded"
+                  title="Back to camera selection"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+                <div>
+                  <h3 className="text-xl font-bold">Recording Segments</h3>
+                  <p className="text-sm text-gray-600">{segmentModal.matchId}</p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {segmentModal.camera === 'cam0' ? 'Camera 0' : 'Camera 1'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {uniqueSegmentCameras.map((cameraKey) => (
+                  <button
+                    key={cameraKey}
+                    onClick={() => handleCameraClick(segmentModal.matchId, cameraKey)}
+                    className={`px-3 py-1.5 text-sm rounded border transition ${
+                      segmentModal.camera === cameraKey
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                    }`}
+                  >
+                    {cameraKey === 'cam0' ? 'Camera 0' : 'Camera 1'}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -282,25 +380,33 @@ export const Matches: React.FC = () => {
               <>
                 {/* Summary Box */}
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm text-gray-700">
                     <div>
-                      <span className="text-sm font-medium text-gray-700">Total Segments:</span>
-                      <span className="ml-2 text-lg font-bold text-blue-600">
-                        {currentSegments.length}
-                      </span>
+                      <p className="font-medium text-gray-800">Total Segments</p>
+                      <p className="text-lg font-bold text-blue-600">{currentSegments.length}</p>
                     </div>
                     <div>
-                      <span className="text-sm font-medium text-gray-700">Total Size:</span>
-                      <span className="ml-2 text-lg font-bold text-blue-600">
+                      <p className="font-medium text-gray-800">Total Size</p>
+                      <p className="text-lg font-bold text-blue-600">
                         {formatSize(currentSegments.reduce((sum, s) => sum + s.size_mb, 0))}
-                      </span>
+                      </p>
                     </div>
-                    {segmentDetails?.segment_duration_minutes && (
-                      <div className="col-span-2">
-                        <span className="text-sm font-medium text-gray-700">Segment Duration:</span>
-                        <span className="ml-2 text-sm text-gray-600">
-                          ~{segmentDetails.segment_duration_minutes} minutes each
-                        </span>
+                    {activeCameraEntry && (
+                      <div>
+                        <p className="font-medium text-gray-800">Recording Format</p>
+                        <p className="text-gray-600">{getFileFormat(activeCameraEntry.filename || activeCameraEntry.file)}</p>
+                      </div>
+                    )}
+                    {cameraDurationEstimate && (
+                      <div>
+                        <p className="font-medium text-gray-800">Approx. Total Duration</p>
+                        <p className="text-gray-600">{cameraDurationEstimate}</p>
+                      </div>
+                    )}
+                    {activeCameraEntry?.created_at && (
+                      <div className="sm:col-span-2">
+                        <p className="font-medium text-gray-800">Date Captured</p>
+                        <p className="text-gray-600">{formatFullTimestamp(activeCameraEntry.created_at)}</p>
                       </div>
                     )}
                   </div>
@@ -323,30 +429,40 @@ export const Matches: React.FC = () => {
                 {/* Segment List */}
                 <div className="space-y-2">
                   <h4 className="text-sm font-semibold text-gray-700 mb-2">Individual Segments:</h4>
-                  {currentSegments.map((segment) => (
-                    <div
-                      key={segment.name}
-                      className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200 hover:bg-gray-100"
-                    >
-                      <div className="flex-1">
-                        <div className="font-medium text-sm">
-                          Segment {segment.segment_number + 1}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {formatSize(segment.size_mb)} • {formatTimestamp(segment.created_at)}
-                        </div>
-                      </div>
-                      <a
-                        href={segment.path}
-                        download
-                        className="flex items-center px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm touch-manipulation ml-2"
-                        onClick={(e) => e.stopPropagation()}
+                  {currentSegments.map((segment) => {
+                    const segmentFormat = getFileFormat(segment.name || segment.path);
+                    const captureTime = formatFullTimestamp(segment.created_at);
+                    const approxSegmentDuration = formatDurationFromMinutes(segmentDetails?.segment_duration_minutes);
+
+                    return (
+                      <div
+                        key={segment.name}
+                        className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-3 bg-gray-50 rounded border border-gray-200 hover:bg-gray-100"
                       >
-                        <Download className="w-4 h-4 mr-1" />
-                        Download
-                      </a>
-                    </div>
-                  ))}
+                        <div className="flex-1">
+                          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                            <span>Segment {segment.segment_number + 1} of {currentSegments.length}</span>
+                            <span className="text-xs font-normal text-gray-500">{segment.name}</span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1">
+                            <span>{formatSize(segment.size_mb)}</span>
+                            <span>{segmentFormat} format</span>
+                            {approxSegmentDuration && <span>~{approxSegmentDuration}</span>}
+                            <span>Captured {captureTime}</span>
+                          </div>
+                        </div>
+                        <a
+                          href={segment.path}
+                          download
+                          className="flex items-center justify-center px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm touch-manipulation md:ml-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Download className="w-4 h-4 mr-1" />
+                          Download
+                        </a>
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
