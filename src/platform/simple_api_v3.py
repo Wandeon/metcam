@@ -615,10 +615,12 @@ if Path("/tmp/hls").exists():
 
 if __name__ == "__main__":
     import uvicorn
+    # Support API_PORT environment variable for development/production separation
+    port = int(os.getenv('API_PORT', '8000'))
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_level="info",
         access_log=True
     )

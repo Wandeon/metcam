@@ -1,12 +1,19 @@
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.0.0
-python-multipart>=0.0.6
-pyjwt>=2.8.0
-passlib[bcrypt]>=1.7.4
-python-dotenv>=1.0.0
+# FootballVision Pro V3 - Python Dependencies
+# For NVIDIA Jetson Orin Nano with JetPack 6.1+
+
+# Core API Framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+
+# System Monitoring
 psutil>=5.9.0
-prometheus-client>=0.18.0
-prometheus-fastapi-instrumentator>=6.1.0
-paramiko>=3.4.0
-requests>=2.31.0
+
+# Metrics & Monitoring
+prometheus-client>=0.20.0
+prometheus-fastapi-instrumentator>=7.0.0
+
+# GStreamer Python Bindings
+# Note: Install via system package manager (apt)
+# sudo apt install python3-gi gir1.2-gstreamer-1.0
+# PyGObject is provided by python3-gi package

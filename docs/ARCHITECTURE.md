@@ -78,7 +78,18 @@ Successfully redesigned FootballVision Pro from **subprocess-based scripts** to 
      - Independent from recording
      - HLS segments in `/dev/shm/hls/` (served via `/hls/cam{N}.m3u8`)
 
-5. **simple_api_v3.py** (12KB)
+5. **pipeline_manager.py** (8KB) ⭐ NEW
+   - Location: `/home/mislav/footballvision-pro/src/video-pipeline/`
+   - Purpose: System-level mutual exclusion for pipelines
+   - Features:
+     - File-based locks in `/var/lock/footballvision/`
+     - Recording mode uses force=True (takes priority)
+     - Preview mode uses force=False (respects recording)
+     - Locks persist across crashes
+     - Automatic stale lock cleanup (5+ minute threshold)
+     - **CRITICAL:** Prevents recording and preview from running simultaneously
+
+6. **simple_api_v3.py** (12KB)
    - Location: `/home/mislav/footballvision-pro/src/platform/`
    - Purpose: FastAPI server using new services
    - Features:
@@ -255,7 +266,6 @@ hlssink2
 **Current Settings**:
 - Rotation: 0° (both cameras)
 - Crop: Trim 480px left/right, 272px top/bottom (both cameras)
-- Barrel correction: Disabled (k1=0, k2=0)
 - Digital gain: Enabled (1-4x)
 - Analog gain: Enabled (1-16x)
 - Exposure time: 13µs - 33ms
@@ -361,10 +371,11 @@ ls -lh /mnt/recordings/test_v3/segments/
 
 ## Known Limitations
 
-1. **Preview and recording pipelines independent**:
-   - Can run simultaneously
-   - No automatic stopping of preview when recording starts (removed from v3)
-   - Frontend should handle this if needed
+1. **Preview and recording are mutually exclusive** ⭐:
+   - CANNOT run simultaneously (enforced by pipeline_manager.py)
+   - Recording takes priority with force=True
+   - Preview respects recording and will fail to start if recording is active
+   - This prevents CPU from being overwhelmed by 4 pipelines simultaneously
 
 2. **Recording protection is strict**:
    - 10 seconds minimum recording time
@@ -447,24 +458,18 @@ print(mgr.list_pipelines())
 
 ## Files Summary
 
-**New architecture files**:
+**V3 Core Files**:
 - `/home/mislav/footballvision-pro/src/video-pipeline/gstreamer_manager.py`
 - `/home/mislav/footballvision-pro/src/video-pipeline/pipeline_builders.py`
+- `/home/mislav/footballvision-pro/src/video-pipeline/pipeline_manager.py` ⭐ (Mutual Exclusion)
 - `/home/mislav/footballvision-pro/src/video-pipeline/recording_service.py`
 - `/home/mislav/footballvision-pro/src/video-pipeline/preview_service.py`
+- `/home/mislav/footballvision-pro/src/video-pipeline/camera_config_manager.py`
 - `/home/mislav/footballvision-pro/src/platform/simple_api_v3.py`
 
-**Test files**:
-- `/tmp/test_new_architecture.sh`
-
 **State files** (created at runtime):
-- `/tmp/footballvision_recording_state.json`
-
-**Old files** (still present, can be removed after validation):
-- `/home/mislav/footballvision-pro/src/video-pipeline/recording_manager_enhanced.py`
-- `/home/mislav/footballvision-pro/src/video-pipeline/preview_service_enhanced.py`
-- `/home/mislav/footballvision-pro/scripts/record_dual_gpu_with_correction.py`
-- `/home/mislav/footballvision-pro/scripts/preview_hls_gpu_corrected.py`
+- `/var/lock/footballvision/pipeline_state.json` (Pipeline lock state)
+- `/tmp/footballvision_recording_state.json` (Recording state persistence)
 
 ## Implementation Complete ✅
 

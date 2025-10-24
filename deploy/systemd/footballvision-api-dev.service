@@ -1,0 +1,53 @@
+[Unit]
+Description=FootballVision Pro Development API
+After=network-online.target
+Wants=network-online.target
+After=systemd-resolved.service
+After=NetworkManager.service
+After=nvargus-daemon.service
+
+# Conflict with production service (both need exclusive camera access)
+Conflicts=footballvision-api-enhanced.service
+
+[Service]
+Type=simple
+User=mislav
+Group=mislav
+WorkingDirectory=/home/mislav/footballvision-dev
+
+# Environment setup
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PYTHONPATH=/home/mislav/footballvision-dev/src"
+Environment="PYTHONUNBUFFERED=1"
+Environment="API_PORT=8001"
+
+# Main service - runs on port 8001
+ExecStart=/usr/bin/python3 /home/mislav/footballvision-dev/src/platform/simple_api_v3.py
+
+# Pre-start actions
+ExecStartPre=/bin/bash -c 'mkdir -p /var/log/footballvision-dev/{api,system,crashes}'
+
+# Restart policy - disabled for development (manual control)
+Restart=no
+RestartSec=10
+
+# Kill settings
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Resource limits
+LimitNOFILE=65536
+Nice=-5
+
+# Logging - separate from production
+StandardOutput=append:/var/log/footballvision-dev/api/service.log
+StandardError=append:/var/log/footballvision-dev/api/error.log
+
+# Security
+PrivateTmp=false
+ProtectHome=false
+ProtectSystem=false
+
+[Install]
+WantedBy=multi-user.target
