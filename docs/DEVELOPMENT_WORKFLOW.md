@@ -15,8 +15,8 @@ FootballVision Pro uses a **multi-environment setup** that allows safe developme
 
 | Environment | Directory | Port | Service | Branch |
 |------------|-----------|------|---------|--------|
-| **Production** | `/home/mislav/footballvision-pro` | 8000 | `footballvision-api-enhanced` | `pipeline-native-60fps` |
-| **Development** | `/home/mislav/footballvision-dev` | 8001 | `footballvision-api-dev` | `dev` |
+| **Production** | `/home/mislav/footballvision-pro` | 8000 | `footballvision-api-enhanced` | `main` |
+| **Development** | `/home/mislav/footballvision-dev` | 8001 | `footballvision-api-dev` | `develop` |
 
 ### Key Features
 
@@ -33,8 +33,7 @@ FootballVision Pro uses a **multi-environment setup** that allows safe developme
 cd /home/mislav
 git clone https://github.com/Wandeon/metcam.git footballvision-dev
 cd footballvision-dev
-git checkout pipeline-native-60fps
-git checkout -b dev
+git checkout develop
 ```
 
 ### 2. Install Development Service
@@ -113,10 +112,10 @@ git commit -m "feat: Description of improvement"
 # Push to GitHub
 git push origin feature/my-improvement
 
-# Merge to dev branch (or create PR)
-git checkout dev
+# Merge to develop branch (or create PR)
+git checkout develop
 git merge feature/my-improvement
-git push origin dev
+git push origin develop
 ```
 
 ### Step 5: Deploy to Production
@@ -126,17 +125,17 @@ When satisfied with testing:
 ```bash
 # First, ensure production branch has your changes
 cd ~/footballvision-pro
-git checkout pipeline-native-60fps
-git pull origin pipeline-native-60fps
+git checkout main
+git pull origin main
 
-# Option A: If dev → production merge done on GitHub
+# Option A: If develop → main merge done on GitHub
 # Production already has latest code
 
 # Option B: If merging locally
 cd ~/footballvision-dev
-git checkout pipeline-native-60fps
-git merge dev
-git push origin pipeline-native-60fps
+git checkout main
+git merge develop
+git push origin main
 
 # Deploy to production
 ~/deploy-to-prod.sh
@@ -146,7 +145,7 @@ The deployment script will:
 1. Show current production and GitHub states
 2. Ask for confirmation
 3. Create automatic backup
-4. Pull latest code from GitHub
+4. Pull latest code from origin/main
 5. Update dependencies (if changed)
 6. Build web dashboard
 7. Deploy and restart service
@@ -424,13 +423,11 @@ journalctl -u footballvision-api-enhanced -n 200
 ### Branch Strategy
 
 ```
-main (stable releases)
+main (production branch - deployed to live system)
   ↓
-pipeline-native-60fps (production branch)
+develop (active development - tested features)
   ↓
-dev (active development)
-  ↓
-feature/* (feature branches)
+feature/* (feature branches - work in progress)
 ```
 
 ### Development Process
@@ -438,8 +435,8 @@ feature/* (feature branches)
 1. **Create feature branch**:
    ```bash
    cd ~/footballvision-dev
-   git checkout dev
-   git pull origin dev
+   git checkout develop
+   git pull origin develop
    git checkout -b feature/my-improvement
    ```
 
@@ -455,18 +452,18 @@ feature/* (feature branches)
    ```bash
    git push origin feature/my-improvement
 
-   # Merge to dev (locally or via PR)
-   git checkout dev
+   # Merge to develop (locally or via PR)
+   git checkout develop
    git merge feature/my-improvement
-   git push origin dev
+   git push origin develop
    ```
 
 4. **Deploy to production**:
    ```bash
-   # Merge dev → pipeline-native-60fps (on GitHub or locally)
-   git checkout pipeline-native-60fps
-   git merge dev
-   git push origin pipeline-native-60fps
+   # Merge develop → main (on GitHub or locally)
+   git checkout main
+   git merge develop
+   git push origin main
 
    # Deploy
    ~/deploy-to-prod.sh
