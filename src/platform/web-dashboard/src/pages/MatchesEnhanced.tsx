@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Download, Film, RefreshCw, Trash2, ChevronRight, ArrowLeft, Package } from 'lucide-react';
 
 interface RecordingEntry {
@@ -6,6 +6,7 @@ interface RecordingEntry {
   filename?: string;
   size_mb: number;
   created_at?: number;
+  createdAtMs?: number;
   segment_count?: number;
   type?: 'segmented' | 'single';
 }
@@ -13,8 +14,10 @@ interface RecordingEntry {
 interface Match {
   id: string;
   files: RecordingEntry[];
-  date: string;
+  date: number;
   total_size_mb: number;
+  cameraCount: number;
+  segmentsCount: number;
 }
 
 interface SegmentInfo {
@@ -47,9 +50,64 @@ const formatSize = (mb: number) => {
   return `${mb.toFixed(1)} MB`;
 };
 
-const formatTimestamp = (timestamp: number) => {
-  const date = new Date(timestamp * 1000);
-  return date.toLocaleTimeString();
+const formatTimestamp = (timestamp?: number) => {
+  if (!timestamp) {
+    return 'Unknown time';
+  }
+
+  const normalized = timestamp < 1e12 ? timestamp * 1000 : timestamp;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) {
+    return 'Unknown time';
+  }
+  return date.toLocaleString();
+};
+
+const parseTimestampFromString = (value?: string): number | null => {
+  if (!value) {
+    return null;
+  }
+
+  const fullMatch = value.match(/(20\d{2})[-_]?([01]?\d)[-_]?([0-3]?\d)[T\s_-]?([0-2]?\d)[:\-]?([0-5]?\d)[:\-]?([0-5]?\d)/);
+  if (fullMatch) {
+    const [, yearStr, monthStr, dayStr, hourStr, minuteStr, secondStr] = fullMatch;
+    const year = Number(yearStr);
+    if (!Number.isFinite(year)) {
+      return null;
+    }
+    const month = Number(monthStr) || 1;
+    const day = Number(dayStr) || 1;
+    const hour = Number(hourStr) || 0;
+    const minute = Number(minuteStr) || 0;
+    const second = Number(secondStr) || 0;
+    const parsed = new Date(year, month - 1, day, hour, minute, second);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.getTime();
+    }
+  }
+
+  const dateMatch = value.match(/(20\d{2})[-_]?([01]?\d)[-_]?([0-3]?\d)/);
+  if (dateMatch) {
+    const [, yearStr, monthStr, dayStr] = dateMatch;
+    const year = Number(yearStr);
+    if (!Number.isFinite(year)) {
+      return null;
+    }
+    const month = Number(monthStr) || 1;
+    const day = Number(dayStr) || 1;
+    const parsed = new Date(year, month - 1, day);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.getTime();
+    }
+  }
+
+  return null;
+};
+
+const getCameraKey = (file: string) => {
+  if (file.includes('cam0')) return 'cam0';
+  if (file.includes('cam1')) return 'cam1';
+  return file;
 };
 
 export const Matches: React.FC = () => {
@@ -60,11 +118,39 @@ export const Matches: React.FC = () => {
   const [segmentDetails, setSegmentDetails] = useState<SegmentDetails | null>(null);
   const [loadingSegments, setLoadingSegments] = useState(false);
   const [deletingMatchId, setDeletingMatchId] = useState<string | null>(null);
+  const [diskStatus, setDiskStatus] = useState<{ freeGb: number; percentUsed: number } | null>(null);
+  const [sortOption, setSortOption] = useState<'date_desc' | 'date_asc' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'>('date_desc');
 
   const loadMatches = async () => {
     try {
-      const response = await fetch('/api/v1/recordings');
-      const data = await response.json();
+      const [recordingsResponse, healthResponse] = await Promise.all([
+        fetch('/api/v1/recordings'),
+        fetch('/api/v1/health').catch(() => null),
+      ]);
+
+      const data = await recordingsResponse.json();
+
+      if (healthResponse && healthResponse.ok) {
+        try {
+          const health = await healthResponse.json();
+          if (health?.system) {
+            const freeGbRaw = health.system.disk_free_gb;
+            const percentUsedRaw = health.system.disk_percent;
+            if (typeof freeGbRaw === 'number' && typeof percentUsedRaw === 'number') {
+              setDiskStatus({
+                freeGb: freeGbRaw,
+                percentUsed: percentUsedRaw,
+              });
+            } else {
+              setDiskStatus(null);
+            }
+          }
+        } catch (error) {
+          console.warn('Unable to parse disk status', error);
+        }
+      } else if (healthResponse) {
+        setDiskStatus(null);
+      }
 
       if (!data.recordings) {
         setMatches([]);
@@ -80,23 +166,65 @@ export const Matches: React.FC = () => {
             created_at: f.created_at,
             segment_count: f.segment_count,
             type: f.type || (f.segment_count && f.segment_count > 1 ? 'segmented' : 'single'),
-          }));
+          })).map((entry) => {
+            const explicitTimestamp = typeof entry.created_at === 'number'
+              ? entry.created_at * 1000
+              : typeof entry.created_at === 'string'
+                ? Date.parse(entry.created_at)
+                : undefined;
+
+            const validExplicitTimestamp =
+              typeof explicitTimestamp === 'number' && !Number.isNaN(explicitTimestamp)
+                ? explicitTimestamp
+                : undefined;
+
+            const inferredTimestamp =
+              validExplicitTimestamp ??
+              parseTimestampFromString(entry.filename || entry.file) ??
+              parseTimestampFromString(matchId) ??
+              undefined;
+
+            return {
+              ...entry,
+              createdAtMs: inferredTimestamp,
+              created_at: entry.created_at && typeof entry.created_at === 'number'
+                ? entry.created_at
+                : inferredTimestamp
+                  ? Math.floor(inferredTimestamp / 1000)
+                  : undefined,
+            };
+          });
 
           const totalSize = entries.reduce((sum, entry) => sum + entry.size_mb, 0);
-          const firstTimestamp = entries[0]?.created_at
-            ? new Date(entries[0].created_at * 1000).toISOString()
-            : new Date().toISOString();
+          const timestamps = entries
+            .map(entry => entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined))
+            .filter((value): value is number => Boolean(value));
+          const firstTimestamp = timestamps.length > 0
+            ? Math.min(...timestamps)
+            : parseTimestampFromString(matchId) || Date.now();
+
+          const cameraMap = new Map<string, number>();
+          entries.forEach((entry) => {
+            const key = getCameraKey(entry.file);
+            const segmentsForEntry = entry.segment_count ?? 1;
+            cameraMap.set(key, (cameraMap.get(key) ?? 0) + segmentsForEntry);
+          });
+
+          const cameraCount = cameraMap.size || (entries.length > 0 ? 1 : 0);
+          const segmentsCount = Array.from(cameraMap.values()).reduce((sum, count) => sum + count, 0) || entries.length;
 
           return {
             id: matchId,
             files: entries,
             date: firstTimestamp,
             total_size_mb: totalSize,
+            cameraCount,
+            segmentsCount,
           };
         }
       );
 
-      setMatches(matchList.sort((a, b) => (a.date > b.date ? -1 : 1)));
+      setMatches(matchList);
     } catch (error) {
       console.error('Failed to load matches:', error);
     } finally {
@@ -177,17 +305,69 @@ export const Matches: React.FC = () => {
     ? segmentDetails[segmentModal.camera]
     : [];
 
+  const sortedMatches = useMemo(() => {
+    const matchesCopy = [...matches];
+    matchesCopy.sort((a, b) => {
+      switch (sortOption) {
+        case 'date_asc':
+          return a.date - b.date;
+        case 'name_asc':
+          return a.id.localeCompare(b.id);
+        case 'name_desc':
+          return b.id.localeCompare(a.id);
+        case 'size_asc':
+          return a.total_size_mb - b.total_size_mb;
+        case 'size_desc':
+          return b.total_size_mb - a.total_size_mb;
+        case 'date_desc':
+        default:
+          return b.date - a.date;
+      }
+    });
+    return matchesCopy;
+  }, [matches, sortOption]);
+
   return (
     <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Matches</h1>
-        <button
-          onClick={loadMatches}
-          className="flex items-center px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 touch-manipulation"
-        >
-          <RefreshCw className="w-4 h-4 mr-2" />
-          Refresh
-        </button>
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">Matches</h1>
+          <div className="mt-2 text-sm text-gray-600 flex flex-col sm:flex-row sm:items-center sm:gap-2">
+            <span className="font-medium text-gray-700">Disk space:</span>
+            {diskStatus ? (
+              <span>
+                {diskStatus.freeGb.toFixed(1)} GB free
+                <span className="text-xs text-gray-500 ml-2">({diskStatus.percentUsed.toFixed(1)}% used)</span>
+              </span>
+            ) : (
+              <span className="text-xs text-gray-500">Unavailable</span>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <label className="flex items-center text-sm text-gray-600">
+            <span className="mr-2">Sort by:</span>
+            <select
+              value={sortOption}
+              onChange={(event) => setSortOption(event.target.value as typeof sortOption)}
+              className="border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="name_asc">Name A-Z</option>
+              <option value="name_desc">Name Z-A</option>
+              <option value="size_desc">Size high-low</option>
+              <option value="size_asc">Size low-high</option>
+            </select>
+          </label>
+          <button
+            onClick={loadMatches}
+            className="flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 touch-manipulation"
+          >
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Level 1: Camera Selection Modal */}
@@ -209,6 +389,7 @@ export const Matches: React.FC = () => {
               {currentMatch?.files.map((entry) => {
                 const isSegmented = entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1);
                 const camera = entry.file.includes('cam0') ? 'cam0' : 'cam1';
+                const createdLabel = formatTimestamp(entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined));
 
                 return (
                   <button
@@ -219,14 +400,17 @@ export const Matches: React.FC = () => {
                     }
                     className="flex items-center justify-between px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
                   >
-                    <span className="flex items-center">
-                      <Download className="w-4 h-4 mr-2" />
-                      {formatLabel(entry.file)}
-                      {isSegmented && entry.segment_count && (
-                        <span className="ml-2 px-2 py-0.5 bg-blue-500 rounded text-xs">
-                          {entry.segment_count} segments
-                        </span>
-                      )}
+                    <span className="flex flex-col items-start text-left">
+                      <span className="flex items-center">
+                        <Download className="w-4 h-4 mr-2" />
+                        {formatLabel(entry.file)}
+                        {isSegmented && entry.segment_count && (
+                          <span className="ml-2 px-2 py-0.5 bg-blue-500 rounded text-xs">
+                            {entry.segment_count} segments
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xs text-gray-200 mt-1">{createdLabel}</span>
                     </span>
                     <span className="flex items-center gap-2">
                       <span className="text-xs opacity-75">{formatSize(entry.size_mb)}</span>
@@ -370,19 +554,20 @@ export const Matches: React.FC = () => {
       )}
 
       <div className="grid gap-4">
-        {matches.map((match) => (
+        {sortedMatches.map((match) => (
           <div key={match.id} className="bg-white rounded-lg shadow p-4 md:p-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
               <div>
                 <h3 className="text-lg font-semibold">{match.id}</h3>
                 <p className="text-gray-600 text-sm">
-                  {new Date(match.date).toLocaleDateString()} at {new Date(match.date).toLocaleTimeString()}
+                  {formatTimestamp(match.date)}
                 </p>
                 <p className="text-gray-500 text-xs mt-1">
-                  {match.files.length} {match.files.length === 1 ? 'camera' : 'cameras'} • {formatSize(match.total_size_mb)} total
-                  {match.files.some(f => f.type === 'segmented' || (f.segment_count && f.segment_count > 1)) &&
-                    <span className="ml-1">• Segmented Recording</span>
-                  }
+                  {match.cameraCount} {match.cameraCount === 1 ? 'camera' : 'cameras'}
+                  {match.segmentsCount > match.cameraCount && (
+                    <span className="ml-1">• {match.segmentsCount} segments</span>
+                  )}
+                  <span className="ml-1">• {formatSize(match.total_size_mb)} total</span>
                 </p>
               </div>
 
