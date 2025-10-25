@@ -453,7 +453,7 @@ export const Matches: React.FC = () => {
             cam1: [],
             other: [],
           };
-          data.segments.forEach((segment: any, index: number) => {
+          data.segments.forEach((segment: any) => {
             const normalized = normalizeSegments([segment], 'other')[0];
             const cameraKey = (normalized.camera === 'cam0' || normalized.camera === 'cam1')
               ? normalized.camera
