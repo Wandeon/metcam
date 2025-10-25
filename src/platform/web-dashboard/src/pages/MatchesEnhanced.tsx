@@ -120,6 +120,7 @@ export const Matches: React.FC = () => {
   const [deletingMatchId, setDeletingMatchId] = useState<string | null>(null);
   const [diskStatus, setDiskStatus] = useState<{ freeGb: number; percentUsed: number } | null>(null);
   const [sortOption, setSortOption] = useState<'date_desc' | 'date_asc' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'>('date_desc');
+  const [debugInfo, setDebugInfo] = useState<string>('');
 
   const sortedMatches = useMemo(() => {
     const matchesCopy = [...matches];
@@ -174,12 +175,14 @@ export const Matches: React.FC = () => {
 
   const loadMatches = async () => {
     try {
+      setDebugInfo('Fetching data...');
       const [recordingsResponse, healthResponse] = await Promise.all([
         fetch('/api/v1/recordings'),
         fetch('/api/v1/health').catch(() => null),
       ]);
 
       const data = await recordingsResponse.json();
+      setDebugInfo(`API response: ${JSON.stringify(data).substring(0, 100)}...`);
 
       if (healthResponse && healthResponse.ok) {
         try {
@@ -276,8 +279,10 @@ export const Matches: React.FC = () => {
       );
 
       setMatches(matchList);
+      setDebugInfo(`Loaded ${matchList.length} matches`);
     } catch (error) {
       console.error('Failed to load matches:', error);
+      setDebugInfo(`Error: ${error}`);
     } finally {
       setLoading(false);
     }
@@ -412,6 +417,11 @@ export const Matches: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6">
+      {debugInfo && (
+        <div className="mb-4 p-3 bg-yellow-100 border border-yellow-400 rounded text-sm font-mono">
+          <strong>Debug:</strong> {debugInfo} | Loading: {loading ? 'true' : 'false'} | Matches: {matches.length} | Sorted: {sortedMatches.length}
+        </div>
+      )}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Matches</h1>
