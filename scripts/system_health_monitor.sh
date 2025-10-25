@@ -138,15 +138,29 @@ check_network() {
 
 # 8. Check API Service
 check_api_service() {
-    if ! systemctl is-active --quiet footballvision-api-enhanced; then
-        alert "API service is not running! Attempting restart..."
-        sudo systemctl restart footballvision-api-enhanced
-        sleep 5
+    # Check which service is active (production or development)
+    local prod_active=$(systemctl is-active footballvision-api-enhanced 2>/dev/null)
+    local dev_active=$(systemctl is-active footballvision-api-dev 2>/dev/null)
 
-        if ! systemctl is-active --quiet footballvision-api-enhanced; then
-            alert "Failed to restart API service!"
+    if [ "$prod_active" == "active" ]; then
+        log_message "API service status: production active"
+    elif [ "$dev_active" == "active" ]; then
+        log_message "API service status: development active"
+    else
+        # Neither service is running - this is a problem
+        # Only auto-restart production if it's enabled (not in development mode)
+        if systemctl is-enabled --quiet footballvision-api-enhanced 2>/dev/null; then
+            alert "API service is not running! Attempting to restart production..."
+            sudo systemctl restart footballvision-api-enhanced
+            sleep 5
+
+            if ! systemctl is-active --quiet footballvision-api-enhanced; then
+                alert "Failed to restart API service!"
+            else
+                log_message "API service restarted successfully"
+            fi
         else
-            log_message "API service restarted successfully"
+            log_message "API service not running (development mode, skipping auto-restart)"
         fi
     fi
 }
