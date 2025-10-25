@@ -7,8 +7,12 @@ Uses in-process GStreamer for instant, bulletproof operations
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+from collections import defaultdict
+from datetime import datetime
+import re
 import sys
 import os
 import psutil
@@ -45,6 +49,9 @@ from recording_service import get_recording_service
 from preview_service import get_preview_service
 from pipeline_manager import pipeline_manager, PipelineMode
 
+# Import development router
+from dev_router import dev_router
+
 app = FastAPI(
     title="FootballVision Pro API v3",
     description="In-process GStreamer for instant, bulletproof operations",
@@ -59,6 +66,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include development router
+app.include_router(dev_router)
 
 # Clean up any stale locks from previous runs
 try:
@@ -441,48 +451,153 @@ Instrumentator().instrument(app).expose(app)
 # Recordings Management Endpoints
 # ============================================================================
 
+VIDEO_EXTENSIONS = ['*.mkv', '*.mp4', '*.avi', '*.mov']
+ARCHIVE_EXTENSIONS = ['*.zip']
+
+
+def _extract_camera_from_name(filename: str) -> str:
+    filename_lower = filename.lower()
+    if 'cam0' in filename_lower:
+        return 'cam0'
+    if 'cam1' in filename_lower:
+        return 'cam1'
+    camera_match = re.search(r'cam(\d+)', filename_lower)
+    if camera_match:
+        return f"cam{camera_match.group(1)}"
+    return 'unknown'
+
+
+def _extract_segment_number(filename: str) -> Optional[int]:
+    stem = Path(filename).stem
+    match = re.search(r'(?:_|-)(\d{1,4})$', stem)
+    if match:
+        try:
+            digits = match.group(1)
+            value = int(digits)
+            if digits.startswith('0') or value == 0:
+                return value + 1
+            return value
+        except ValueError:
+            return None
+    # Fall back to searching anywhere in the stem
+    match_any = re.search(r'(\d+)$', stem)
+    if match_any:
+        try:
+            digits = match_any.group(1)
+            value = int(digits)
+            if digits.startswith('0') or value == 0:
+                return value + 1
+            return value
+        except ValueError:
+            return None
+    return None
+
+
+def _build_segment_info(match_id: str, file_path: Path, index: int) -> dict:
+    stat_result = file_path.stat()
+    size_mb = round(stat_result.st_size / (1024 * 1024), 2)
+    created_at = int(stat_result.st_mtime)
+    camera_key = _extract_camera_from_name(file_path.name)
+    segment_number = _extract_segment_number(file_path.name)
+    if segment_number is None:
+        segment_number = index + 1
+
+    return {
+        "name": file_path.name,
+        "path": f"/api/v1/recordings/{match_id}/segments/{file_path.name}",
+        "size_mb": size_mb,
+        "created_at": created_at,
+        "segment_number": segment_number,
+        "camera": camera_key,
+    }
+
+
+def _build_single_file_info(match_id: str, file_path: Path) -> dict:
+    stat_result = file_path.stat()
+    size_mb = round(stat_result.st_size / (1024 * 1024), 2)
+    created_at = int(stat_result.st_mtime)
+    return {
+        "file": file_path.name,
+        "size_mb": size_mb,
+        "created_at": created_at,
+        "type": "single",
+        "path": f"/api/v1/recordings/{match_id}/files/{file_path.name}",
+    }
+
+
 @app.get("/api/v1/recordings")
 def list_recordings():
-    """List all recordings from /mnt/recordings"""
+    """List all recordings from /mnt/recordings with enhanced metadata"""
     api_requests.labels(endpoint='recordings', method='GET').inc()
     try:
-        import os
-        import glob
-        
         recordings_dir = Path("/mnt/recordings")
         recordings = {}
-        
+
         if not recordings_dir.exists():
             return {"recordings": {}}
-        
-        # Scan for recording directories
+
         for match_dir in recordings_dir.iterdir():
             if not match_dir.is_dir():
                 continue
-                
+
             match_id = match_dir.name
             segments_dir = match_dir / "segments"
-            
-            if not segments_dir.exists():
-                continue
-            
-            # Get all video files
+            camera_segments = defaultdict(list)
+            segments_total_size = 0.0
+            first_segment_timestamp: Optional[int] = None
+
+            if segments_dir.exists():
+                for ext in VIDEO_EXTENSIONS:
+                    for index, file_path in enumerate(sorted(segments_dir.glob(ext))):
+                        if not file_path.is_file():
+                            continue
+                        segment_info = _build_segment_info(match_id, file_path, index)
+                        camera_segments[segment_info["camera"]].append(segment_info)
+                        segments_total_size += segment_info["size_mb"]
+                        if first_segment_timestamp is None or segment_info["created_at"] < first_segment_timestamp:
+                            first_segment_timestamp = segment_info["created_at"]
+
             files = []
-            for ext in ['*.mkv', '*.mp4', '*.avi']:
-                for file_path in segments_dir.glob(ext):
-                    size_bytes = file_path.stat().st_size
-                    size_mb = size_bytes / (1024 * 1024)
-                    files.append({
-                        "file": file_path.name,
-                        "size_mb": round(size_mb, 2),
-                        "path": str(file_path)
-                    })
-            
+            total_segments = 0
+
+            for camera, segments in camera_segments.items():
+                if not segments:
+                    continue
+                segments_sorted = sorted(segments, key=lambda s: s["segment_number"])
+                camera_size = round(sum(s["size_mb"] for s in segments_sorted), 2)
+                total_segments += len(segments_sorted)
+                files.append({
+                    "file": camera,
+                    "type": "segmented",
+                    "segment_count": len(segments_sorted),
+                    "size_mb": camera_size,
+                    "created_at": segments_sorted[0]["created_at"],
+                })
+
+            single_files = []
+            for ext in VIDEO_EXTENSIONS + ARCHIVE_EXTENSIONS:
+                for file_path in sorted(match_dir.glob(ext)):
+                    if not file_path.is_file():
+                        continue
+                    single_files.append(_build_single_file_info(match_id, file_path))
+
+            files.extend(single_files)
+
             if files:
-                recordings[match_id] = files
-        
+                total_size_mb = round(
+                    segments_total_size + sum(f["size_mb"] for f in single_files),
+                    2,
+                )
+                recordings[match_id] = {
+                    "files": files,
+                    "total_size_mb": total_size_mb,
+                    "camera_count": sum(1 for segments in camera_segments.values() if segments),
+                    "segments_count": total_segments,
+                    "created_at": first_segment_timestamp,
+                }
+
         return {"recordings": recordings}
-        
+
     except Exception as e:
         logger.error(f"Failed to list recordings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -490,32 +605,47 @@ def list_recordings():
 
 @app.get("/api/v1/recordings/{match_id}/segments")
 def get_recording_segments(match_id: str):
-    """Get segments for a specific recording"""
+    """Get segments for a specific recording grouped by camera"""
     api_requests.labels(endpoint='recording_segments', method='GET').inc()
     try:
         segments_dir = Path(f"/mnt/recordings/{match_id}/segments")
-        
+
         if not segments_dir.exists():
             raise HTTPException(status_code=404, detail=f"Recording {match_id} not found")
-        
-        segments = []
-        for ext in ['*.mkv', '*.mp4', '*.avi']:
-            for file_path in sorted(segments_dir.glob(ext)):
-                size_bytes = file_path.stat().st_size
-                size_mb = size_bytes / (1024 * 1024)
-                segments.append({
-                    "file": file_path.name,
-                    "size_mb": round(size_mb, 2),
-                    "path": str(file_path)
-                })
-        
+
+        camera_segments = defaultdict(list)
+        for ext in VIDEO_EXTENSIONS:
+            for index, file_path in enumerate(sorted(segments_dir.glob(ext))):
+                if not file_path.is_file():
+                    continue
+                segment_info = _build_segment_info(match_id, file_path, index)
+                camera_segments[segment_info["camera"]].append(segment_info)
+
+        total_segments = 0
+        total_size = 0.0
+        normalized_segments = {}
+
+        for camera, segments in camera_segments.items():
+            if not segments:
+                continue
+            segments_sorted = sorted(segments, key=lambda s: s["segment_number"])
+            # Ensure sequential numbering for display
+            for idx, segment in enumerate(segments_sorted):
+                segment["segment_number"] = idx + 1
+            normalized_segments[camera] = segments_sorted
+            total_segments += len(segments_sorted)
+            total_size += sum(segment["size_mb"] for segment in segments_sorted)
+
         return {
             "match_id": match_id,
-            "segments": segments,
-            "total_files": len(segments),
-            "total_size_mb": round(sum(s['size_mb'] for s in segments), 2)
+            "type": "segmented" if total_segments > 1 else "single",
+            "cam0": normalized_segments.get('cam0', []),
+            "cam1": normalized_segments.get('cam1', []),
+            "other": normalized_segments.get('unknown', []),
+            "total_size_mb": round(total_size, 2),
+            "segments_count": total_segments,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -601,6 +731,56 @@ def download_recording(match_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to create download for {match_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/recordings/{match_id}/segments/{segment_name}")
+def download_recording_segment(match_id: str, segment_name: str):
+    """Download an individual recording segment"""
+    api_requests.labels(endpoint='recording_segment_download', method='GET').inc()
+    try:
+        safe_name = Path(segment_name).name
+        segment_path = Path(f"/mnt/recordings/{match_id}/segments") / safe_name
+
+        if not segment_path.exists() or not segment_path.is_file():
+            raise HTTPException(status_code=404, detail="Segment not found")
+
+        return FileResponse(
+            path=str(segment_path),
+            media_type='application/octet-stream',
+            filename=safe_name,
+            headers={"Content-Disposition": f"attachment; filename={safe_name}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stream recording segment {segment_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/recordings/{match_id}/files/{file_name}")
+def download_recording_file(match_id: str, file_name: str):
+    """Download a direct recording file from the match directory"""
+    api_requests.labels(endpoint='recording_file_download', method='GET').inc()
+    try:
+        safe_name = Path(file_name).name
+        file_path = Path(f"/mnt/recordings/{match_id}") / safe_name
+
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="Recording file not found")
+
+        return FileResponse(
+            path=str(file_path),
+            media_type='application/octet-stream',
+            filename=safe_name,
+            headers={"Content-Disposition": f"attachment; filename={safe_name}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stream recording file {file_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
