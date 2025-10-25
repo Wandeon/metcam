@@ -73,8 +73,8 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
 
     cropper_props = ""
     if any((left, right, top, bottom)):
-        # VIC expects <left>:<top>:<width>:<height>
-        cropper_props = f" src-crop={left}:{top}:{output_width}:{output_height}"
+        # nvvidconv uses individual crop properties
+        cropper_props = f" left={left} right={right} top={top} bottom={bottom}"
 
     pipeline = (
         f"nvarguscamerasrc name=src sensor-mode=0 sensor-id={camera_id} "
