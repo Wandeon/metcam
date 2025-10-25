@@ -1,9 +1,12 @@
 {
   "version": "1.0",
+  "_comment": "Camera configuration for FootballVision Pro - See src/video-pipeline/README.md for details",
   "cameras": {
     "0": {
       "rotation": 0.0,
       "crop": {
+        "_comment": "Crop values are PIXELS TO REMOVE from each edge, NOT nvvidconv coordinates",
+        "_example": "For 3840x2160 sensor: left=480 removes 480px from left, output width = 3840-480-480 = 2880",
         "left": 480,
         "right": 480,
         "top": 272,
@@ -18,6 +21,8 @@
     "1": {
       "rotation": 0.0,
       "crop": {
+        "_comment": "Crop values are PIXELS TO REMOVE from each edge, NOT nvvidconv coordinates",
+        "_example": "For 3840x2160 sensor: left=480 removes 480px from left, output width = 3840-480-480 = 2880",
         "left": 480,
         "right": 480,
         "top": 272,
