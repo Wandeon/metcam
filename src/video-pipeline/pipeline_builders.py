@@ -57,24 +57,29 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
     """Build the common camera → CPU colour space conversion pipeline section."""
 
     crop = cam_config.get("crop", {})
-    left = int(crop.get("left", 0))
-    right = int(crop.get("right", 0))
-    top = int(crop.get("top", 0))
-    bottom = int(crop.get("bottom", 0))
+    crop_left = int(crop.get("left", 0))
+    crop_right = int(crop.get("right", 0))
+    crop_top = int(crop.get("top", 0))
+    crop_bottom = int(crop.get("bottom", 0))
 
     # Clamp in case a config accidentally overshoots the sensor dimensions.
-    left = max(0, min(left, SENSOR_WIDTH))
-    right = max(0, min(right, SENSOR_WIDTH - left))
-    top = max(0, min(top, SENSOR_HEIGHT))
-    bottom = max(0, min(bottom, SENSOR_HEIGHT - top))
+    crop_left = max(0, min(crop_left, SENSOR_WIDTH))
+    crop_right = max(0, min(crop_right, SENSOR_WIDTH - crop_left))
+    crop_top = max(0, min(crop_top, SENSOR_HEIGHT))
+    crop_bottom = max(0, min(crop_bottom, SENSOR_HEIGHT - crop_top))
 
-    output_width = max(16, SENSOR_WIDTH - left - right)
-    output_height = max(16, SENSOR_HEIGHT - top - bottom)
+    output_width = max(16, SENSOR_WIDTH - crop_left - crop_right)
+    output_height = max(16, SENSOR_HEIGHT - crop_top - crop_bottom)
 
+    # Convert crop pixels to nvvidconv coordinates
+    # nvvidconv uses: left=start_x right=end_x top=start_y bottom=end_y
     cropper_props = ""
-    if any((left, right, top, bottom)):
-        # nvvidconv uses individual crop properties
-        cropper_props = f" left={left} right={right} top={top} bottom={bottom}"
+    if any((crop_left, crop_right, crop_top, crop_bottom)):
+        left_coord = crop_left
+        right_coord = SENSOR_WIDTH - crop_right
+        top_coord = crop_top
+        bottom_coord = SENSOR_HEIGHT - crop_bottom
+        cropper_props = f" left={left_coord} right={right_coord} top={top_coord} bottom={bottom_coord}"
 
     pipeline = (
         f"nvarguscamerasrc name=src sensor-mode=0 sensor-id={camera_id} "
