@@ -9,6 +9,8 @@ interface RecordingEntry {
   createdAtMs?: number;
   segment_count?: number;
   type?: 'segmented' | 'single';
+  path?: string;
+  download_path?: string;
 }
 
 interface Match {
@@ -26,15 +28,18 @@ interface SegmentInfo {
   size_mb: number;
   created_at: number;
   segment_number: number;
+  camera?: string;
 }
 
 interface SegmentDetails {
   match_id: string;
-  type: 'segmented' | 'merged';
+  type: 'segmented' | 'merged' | 'single';
   cam0: SegmentInfo[];
   cam1: SegmentInfo[];
+  other?: SegmentInfo[];
   total_size_mb: number;
   segment_duration_minutes?: number;
+  segments_count?: number;
 }
 
 const formatLabel = (file: string) => {
@@ -212,20 +217,44 @@ export const Matches: React.FC = () => {
       }
 
       const matchList: Match[] = Object.entries(data.recordings).map(
-        ([matchId, files]) => {
-          const entries: RecordingEntry[] = (files as any[]).map((f: any) => ({
-            file: f.file || f.filename || f,
-            filename: f.filename,
-            size_mb: f.size_mb || 0,
-            created_at: f.created_at,
-            segment_count: f.segment_count,
-            type: f.type || (f.segment_count && f.segment_count > 1 ? 'segmented' : 'single'),
-          })).map((entry) => {
-            const explicitTimestamp = typeof entry.created_at === 'number'
-              ? entry.created_at * 1000
-              : typeof entry.created_at === 'string'
-                ? Date.parse(entry.created_at)
-                : undefined;
+        ([matchId, value]) => {
+          const container = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+          const rawFiles: any[] = Array.isArray(value)
+            ? value as any[]
+            : Array.isArray((container as any).files)
+              ? (container as any).files
+              : [];
+
+          const entries: RecordingEntry[] = rawFiles.map((f: any) => {
+            const baseFile = f?.file || f?.filename || f?.name || f;
+            const baseCreatedAt =
+              typeof f?.created_at === 'number'
+                ? f.created_at
+                : typeof f?.createdAt === 'number'
+                  ? f.createdAt
+                  : undefined;
+            const normalizedType: RecordingEntry['type'] =
+              f?.type === 'segmented' || f?.type === 'single'
+                ? f.type
+                : f?.segment_count && f.segment_count > 1
+                  ? 'segmented'
+                  : 'single';
+
+            return {
+              file: baseFile,
+              filename: f?.filename || f?.name,
+              size_mb: typeof f?.size_mb === 'number' ? f.size_mb : 0,
+              created_at: baseCreatedAt,
+              segment_count: typeof f?.segment_count === 'number' ? f.segment_count : undefined,
+              type: normalizedType,
+              path: typeof f?.path === 'string' ? f.path : undefined,
+              download_path: typeof f?.download_path === 'string' ? f.download_path : undefined,
+            };
+          }).map((entry) => {
+            const createdRaw = entry.created_at;
+            const explicitTimestamp = typeof createdRaw === 'number'
+              ? (createdRaw > 1e12 ? createdRaw : createdRaw * 1000)
+              : undefined;
 
             const validExplicitTimestamp =
               typeof explicitTimestamp === 'number' && !Number.isNaN(explicitTimestamp)
@@ -238,34 +267,66 @@ export const Matches: React.FC = () => {
               parseTimestampFromString(matchId) ??
               undefined;
 
+            const normalizedDownloadPath = entry.download_path
+              ?? entry.path
+              ?? (entry.type === 'single'
+                ? `/api/v1/recordings/${encodeURIComponent(matchId)}/files/${encodeURIComponent(entry.file)}`
+                : undefined);
+
             return {
               ...entry,
+              download_path: normalizedDownloadPath,
+              path: entry.path ?? normalizedDownloadPath,
               createdAtMs: inferredTimestamp,
-              created_at: entry.created_at && typeof entry.created_at === 'number'
-                ? entry.created_at
+              created_at: typeof createdRaw === 'number'
+                ? (createdRaw > 1e12 ? Math.floor(createdRaw / 1000) : createdRaw)
                 : inferredTimestamp
                   ? Math.floor(inferredTimestamp / 1000)
                   : undefined,
             };
           });
 
-          const totalSize = entries.reduce((sum, entry) => sum + entry.size_mb, 0);
+          const metadataTimestampRaw =
+            typeof (container as any).created_at === 'number'
+              ? (container as any).created_at
+              : undefined;
+          const metadataTimestamp = metadataTimestampRaw
+            ? (metadataTimestampRaw > 1e12 ? metadataTimestampRaw : metadataTimestampRaw * 1000)
+            : undefined;
+
+          const totalSize = typeof (container as any).total_size_mb === 'number'
+            ? (container as any).total_size_mb
+            : entries.reduce((sum, entry) => sum + entry.size_mb, 0);
+
           const timestamps = entries
             .map(entry => entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined))
             .filter((value): value is number => Boolean(value));
-          const firstTimestamp = timestamps.length > 0
-            ? Math.min(...timestamps)
-            : parseTimestampFromString(matchId) || Date.now();
+          const firstTimestamp = metadataTimestamp
+            ?? (timestamps.length > 0
+              ? Math.min(...timestamps)
+              : parseTimestampFromString(matchId) || Date.now());
 
           const cameraMap = new Map<string, number>();
           entries.forEach((entry) => {
-            const key = getCameraKey(entry.file);
+            const key = entry.type === 'single' ? 'single' : getCameraKey(entry.file);
             const segmentsForEntry = entry.segment_count ?? 1;
-            cameraMap.set(key, (cameraMap.get(key) ?? 0) + segmentsForEntry);
+            if (entry.type === 'segmented' || segmentsForEntry > 1) {
+              cameraMap.set(key, (cameraMap.get(key) ?? 0) + segmentsForEntry);
+            } else if (!cameraMap.has(key)) {
+              cameraMap.set(key, cameraMap.get(key) ?? 0);
+            }
           });
 
-          const cameraCount = cameraMap.size || (entries.length > 0 ? 1 : 0);
-          const segmentsCount = Array.from(cameraMap.values()).reduce((sum, count) => sum + count, 0) || entries.length;
+          const metadataCameraCount = typeof (container as any).camera_count === 'number'
+            ? (container as any).camera_count
+            : undefined;
+          const metadataSegmentsCount = typeof (container as any).segments_count === 'number'
+            ? (container as any).segments_count
+            : undefined;
+
+          const cameraCount = metadataCameraCount ?? (cameraMap.size || (entries.length > 0 ? 1 : 0));
+          const segmentsCount = metadataSegmentsCount
+            ?? (Array.from(cameraMap.values()).reduce((sum, count) => sum + count, 0) || entries.length);
 
           return {
             id: matchId,
@@ -278,8 +339,9 @@ export const Matches: React.FC = () => {
         }
       );
 
-      setMatches(matchList);
-      setDebugInfo(`Loaded ${matchList.length} matches`);
+      const filteredMatches = matchList.filter(match => match.files.length > 0);
+      setMatches(filteredMatches);
+      setDebugInfo(`Loaded ${filteredMatches.length} matches`);
     } catch (error) {
       console.error('Failed to load matches:', error);
       setDebugInfo(`Error: ${error}`);
@@ -341,16 +403,98 @@ export const Matches: React.FC = () => {
         if (!response.ok) {
           throw new Error(`Failed to load segment details (${response.status})`);
         }
-        const data: SegmentDetails = await response.json();
+        const data = await response.json();
         if (cancelled) {
           return;
         }
+        const normalizeSegments = (segments: any[], fallbackCamera: 'cam0' | 'cam1' | 'other') =>
+          segments.map((segment: any, index: number): SegmentInfo => {
+            const rawName = segment?.name || segment?.file || segment?.filename || segment;
+            const safeName = typeof rawName === 'string' ? rawName : `segment_${index + 1}`;
+            const rawCamera = segment?.camera || getCameraKey(safeName) || fallbackCamera;
+            const resolvedCamera = (rawCamera === 'cam0' || rawCamera === 'cam1') ? rawCamera : fallbackCamera;
+            const rawCreated = typeof segment?.created_at === 'number'
+              ? segment.created_at
+              : undefined;
+            const createdSeconds = rawCreated
+              ? (rawCreated > 1e12 ? Math.floor(rawCreated / 1000) : rawCreated)
+              : undefined;
+            const rawSegmentNumber = typeof segment?.segment_number === 'number'
+              ? segment.segment_number
+              : typeof segment?.index === 'number'
+                ? segment.index + 1
+                : undefined;
+            const normalizedPath = typeof segment?.path === 'string'
+              ? segment.path
+              : `/api/v1/recordings/${encodeURIComponent(match.id)}/segments/${encodeURIComponent(safeName)}`;
+
+            return {
+              name: safeName,
+              path: normalizedPath,
+              size_mb: typeof segment?.size_mb === 'number' ? segment.size_mb : 0,
+              created_at: createdSeconds ?? Math.floor(Date.now() / 1000),
+              segment_number: rawSegmentNumber ?? index + 1,
+              camera: resolvedCamera,
+            };
+          });
+
+        const hasStructuredCameras = data && (data.cam0 || data.cam1 || data.other);
+        let cam0Segments: SegmentInfo[] = [];
+        let cam1Segments: SegmentInfo[] = [];
+        let otherSegments: SegmentInfo[] = [];
+
+        if (hasStructuredCameras) {
+          cam0Segments = normalizeSegments(data.cam0 || [], 'cam0');
+          cam1Segments = normalizeSegments(data.cam1 || [], 'cam1');
+          otherSegments = normalizeSegments(data.other || [], 'other');
+        } else if (Array.isArray(data?.segments)) {
+          const grouped: Record<'cam0' | 'cam1' | 'other', SegmentInfo[]> = {
+            cam0: [],
+            cam1: [],
+            other: [],
+          };
+          data.segments.forEach((segment: any, index: number) => {
+            const normalized = normalizeSegments([segment], 'other')[0];
+            const cameraKey = (normalized.camera === 'cam0' || normalized.camera === 'cam1')
+              ? normalized.camera
+              : getCameraKey(normalized.name) as 'cam0' | 'cam1' | 'unknown';
+            if (cameraKey === 'cam1') {
+              grouped.cam1.push({ ...normalized, camera: 'cam1' });
+            } else if (cameraKey === 'cam0') {
+              grouped.cam0.push({ ...normalized, camera: 'cam0' });
+            } else {
+              grouped.other.push({ ...normalized, camera: 'other' });
+            }
+          });
+          cam0Segments = grouped.cam0.map((segment, index) => ({ ...segment, segment_number: index + 1 }));
+          cam1Segments = grouped.cam1.map((segment, index) => ({ ...segment, segment_number: index + 1 }));
+          otherSegments = grouped.other.map((segment, index) => ({ ...segment, segment_number: index + 1 }));
+        }
+
         const sortSegments = (segments: SegmentInfo[]) =>
           [...segments].sort((a, b) => a.segment_number - b.segment_number);
+
+        const sortedCam0 = sortSegments(cam0Segments);
+        const sortedCam1 = sortSegments(cam1Segments);
+        const sortedOther = sortSegments(otherSegments);
+
+        const totalSize = typeof data?.total_size_mb === 'number'
+          ? data.total_size_mb
+          : [...sortedCam0, ...sortedCam1, ...sortedOther].reduce((sum, segment) => sum + segment.size_mb, 0);
+
+        const totalSegments = typeof data?.segments_count === 'number'
+          ? data.segments_count
+          : sortedCam0.length + sortedCam1.length + sortedOther.length;
+
         setSegmentDetails({
-          ...data,
-          cam0: sortSegments(data.cam0 || []),
-          cam1: sortSegments(data.cam1 || []),
+          match_id: data?.match_id || match.id,
+          type: data?.type || 'segmented',
+          cam0: sortedCam0,
+          cam1: sortedCam1,
+          other: sortedOther,
+          total_size_mb: totalSize,
+          segment_duration_minutes: data?.segment_duration_minutes,
+          segments_count: totalSegments,
         });
       } catch (error) {
         console.error('Failed to load segments:', error);
@@ -556,27 +700,31 @@ export const Matches: React.FC = () => {
                           <h5 className="text-sm font-semibold text-gray-700 mb-2">
                             {activeCamera === 'cam0' ? 'Camera 0' : 'Camera 1'} Segments
                           </h5>
-                          {cameraSegments.map(segment => (
-                            <div
-                              key={segment.name}
-                              className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200 hover:bg-gray-100"
-                            >
-                              <div className="flex-1">
-                                <div className="font-medium text-sm">Segment {segment.segment_number + 1}</div>
-                                <div className="text-xs text-gray-500">
-                                  {formatSize(segment.size_mb)} • {formatTimestamp(segment.created_at)}
-                                </div>
-                              </div>
-                              <a
-                                href={segment.path}
-                                download
-                                className="flex items-center px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm touch-manipulation ml-2"
+                          {cameraSegments.map(segment => {
+                            const segmentDownloadUrl = segment.path
+                              || `/api/v1/recordings/${encodeURIComponent(downloadModalMatchId)}/segments/${encodeURIComponent(segment.name)}`;
+                            return (
+                              <div
+                                key={segment.name}
+                                className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200 hover:bg-gray-100"
                               >
-                                <Download className="w-4 h-4 mr-1" />
-                                Download
-                              </a>
-                            </div>
-                          ))}
+                                <div className="flex-1">
+                                  <div className="font-medium text-sm">Segment {segment.segment_number}</div>
+                                  <div className="text-xs text-gray-500">
+                                    {formatSize(segment.size_mb)} • {formatTimestamp(segment.created_at)}
+                                  </div>
+                                </div>
+                                <a
+                                  href={segmentDownloadUrl}
+                                  download
+                                  className="flex items-center px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm touch-manipulation ml-2"
+                                >
+                                  <Download className="w-4 h-4 mr-1" />
+                                  Download
+                                </a>
+                              </div>
+                            );
+                          })}
                         </div>
                       </>
                     ) : (
@@ -594,10 +742,12 @@ export const Matches: React.FC = () => {
                 <h4 className="text-lg font-semibold text-gray-800">Direct Downloads</h4>
                 {singleFiles.map(entry => {
                   const createdLabel = formatTimestamp(entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined));
+                  const directDownloadUrl = entry.download_path
+                    ?? `/api/v1/recordings/${encodeURIComponent(downloadModalMatchId)}/files/${encodeURIComponent(entry.file)}`;
                   return (
                     <a
                       key={entry.file}
-                      href={`/recordings/${downloadModalMatchId}/segments/${entry.file}`}
+                      href={directDownloadUrl}
                       download
                       className="flex items-center justify-between px-4 py-3 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"
                     >
