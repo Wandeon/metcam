@@ -417,6 +417,11 @@ export const apiService = {
     return response.data;
   },
 
+  async restartProduction(): Promise<any> {
+    const response = await api.post('/dev/restart-production');
+    return response.data;
+  },
+
   async getServiceStatus(): Promise<any> {
     const response = await api.get('/dev/service-status');
     return response.data;

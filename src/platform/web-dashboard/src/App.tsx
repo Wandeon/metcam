@@ -9,11 +9,37 @@ import { MatchesEnhanced as Matches } from '@/pages/MatchesEnhanced';
 import { Preview } from '@/pages/Preview';
 import { Development } from '@/pages/Development';
 import { Login } from '@/pages/Login';
-import { Video, Home, Film, Eye, Code, LogOut, Menu, X } from 'lucide-react';
+import { Video, Home, Film, Eye, Code, LogOut, Menu, X, RefreshCw } from 'lucide-react';
+import { apiService } from '@/services/api';
 
 function App() {
   const isAuthenticated = !!localStorage.getItem('access_token');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [restartMessage, setRestartMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  const handleRestartProduction = async () => {
+    if (!window.confirm('Restart production API service? This will briefly interrupt the service.')) {
+      return;
+    }
+
+    setRestarting(true);
+    setRestartMessage(null);
+
+    try {
+      const result = await apiService.restartProduction();
+      if (result.success) {
+        setRestartMessage({ type: 'success', text: 'Production API restarted successfully' });
+      } else {
+        setRestartMessage({ type: 'error', text: result.message || 'Restart failed' });
+      }
+    } catch (err: any) {
+      setRestartMessage({ type: 'error', text: err.message || 'Failed to restart production API' });
+    } finally {
+      setRestarting(false);
+      setTimeout(() => setRestartMessage(null), 5000);
+    }
+  };
 
   if (!isAuthenticated) {
     return (
@@ -94,7 +120,25 @@ function App() {
             </nav>
           </div>
 
-          <div className="absolute bottom-0 left-0 right-0 p-6">
+          <div className="absolute bottom-0 left-0 right-0 p-6 space-y-3">
+            {restartMessage && (
+              <div className={`text-xs p-2 rounded ${
+                restartMessage.type === 'success'
+                  ? 'bg-green-900 text-green-100'
+                  : 'bg-red-900 text-red-100'
+              }`}>
+                {restartMessage.text}
+              </div>
+            )}
+            <button
+              onClick={handleRestartProduction}
+              disabled={restarting}
+              className="flex items-center text-yellow-400 hover:text-yellow-300 transition-colors w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Restart production API service"
+            >
+              <RefreshCw className={`w-5 h-5 mr-2 ${restarting ? 'animate-spin' : ''}`} />
+              {restarting ? 'Restarting...' : 'Restart API'}
+            </button>
             <button
               onClick={() => {
                 localStorage.clear();

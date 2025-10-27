@@ -226,6 +226,49 @@ async def switch_service(request: ServiceSwitchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@dev_router.post("/restart-production")
+async def restart_production():
+    """Restart the production API service"""
+    try:
+        logger.info("Restarting production API service")
+
+        # Restart production service
+        restart_result = run_command("sudo systemctl restart footballvision-api-enhanced")
+
+        if not restart_result["success"]:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to restart production service: {restart_result['stderr']}"
+            )
+
+        # Wait a moment for service to start
+        import time
+        time.sleep(2)
+
+        # Check if service is active
+        status_result = run_command("sudo systemctl is-active footballvision-api-enhanced")
+        is_active = status_result["stdout"].strip() == "active"
+
+        if is_active:
+            logger.info("Production API service restarted successfully")
+            return {
+                "success": True,
+                "message": "Production API service restarted successfully"
+            }
+        else:
+            logger.error("Production API service failed to start after restart")
+            return {
+                "success": False,
+                "message": "Service restart command executed but service is not active. Check logs."
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to restart production service: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @dev_router.get("/service-status")
 async def get_service_status():
     """Check which service is currently running"""
