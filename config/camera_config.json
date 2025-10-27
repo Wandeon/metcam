@@ -12,6 +12,8 @@
         "top": 272,
         "bottom": 272
       },
+      "exposure_compensation": 0.0,
+      "_exposure_comment": "Exposure compensation: -2.0 to +2.0, where 0 is neutral. Positive = brighter, negative = darker. Synchronized across cameras.",
       "correction_type": "barrel",
       "correction_params": {
         "k1": 0.0,
@@ -28,6 +30,8 @@
         "top": 272,
         "bottom": 272
       },
+      "exposure_compensation": 0.0,
+      "_exposure_comment": "Exposure compensation: -2.0 to +2.0, where 0 is neutral. Positive = brighter, negative = darker. Synchronized across cameras.",
       "correction_type": "barrel",
       "correction_params": {
         "k1": 0.0,

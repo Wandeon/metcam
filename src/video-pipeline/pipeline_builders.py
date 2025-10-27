@@ -139,9 +139,13 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
 
         cropper_props = f" left={left_coord} right={right_coord} top={top_coord} bottom={bottom_coord}"
 
+    # Get exposure compensation from config (default 0.0 for no adjustment)
+    exposure_compensation = cam_config.get("exposure_compensation", 0.0)
+
     pipeline = (
         f"nvarguscamerasrc name=src sensor-mode=0 sensor-id={camera_id} "
         "tnr-mode=0 ee-mode=0 wbmode=1 aelock=false "
+        f"aeantibanding=3 exposurecompensation={exposure_compensation} "
         'exposuretimerange="13000 33000000" gainrange="1 16" '
         'ispdigitalgainrange="1 4" saturation=1.0 ! '
         f"video/x-raw(memory:NVMM),width={SENSOR_WIDTH},height={SENSOR_HEIGHT},"

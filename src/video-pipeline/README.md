@@ -179,6 +179,63 @@ CPU [65%@1344,67%@1344,...]  ← Moderate CPU usage
 - Recording segments are written to `/mnt/recordings/<match>/segments/` and roll every 600 s.
 - Preview segments live in `/dev/shm/hls/` (tmpfs) and are served via Caddy at `/hls/cam{N}.m3u8`.
 
+## Brightness and Exposure Control
+
+### Problem: Flickering Brightness
+Auto-exposure (AE) in `nvarguscamerasrc` can cause flickering when cameras independently adjust exposure. This is especially noticeable when cameras view slightly different scenes.
+
+### Solution: Synchronized Exposure Settings
+
+Both cameras use **identical exposure compensation values** to ensure consistent brightness:
+
+```python
+# In pipeline_builders.py
+nvarguscamerasrc aelock=false aeantibanding=3 exposurecompensation=0.0
+```
+
+**Key Settings:**
+- `aelock=false` – Auto-exposure enabled (adapts to lighting changes)
+- `aeantibanding=3` – 60Hz anti-banding mode (reduces flicker from artificial lighting)
+- `exposurecompensation=0.0` – Brightness bias applied to both cameras (-2.0 to +2.0)
+  - `0.0` = neutral (no bias)
+  - `+0.5` = slightly brighter
+  - `-0.5` = slightly darker
+
+### Configuration
+Edit `config/camera_config.json` to adjust exposure compensation:
+
+```json
+{
+  "cameras": {
+    "0": {
+      "exposure_compensation": 0.0
+    },
+    "1": {
+      "exposure_compensation": 0.0
+    }
+  }
+}
+```
+
+**IMPORTANT**: Both cameras should use the **same value** to maintain brightness consistency.
+
+### Exposure Ranges
+The pipeline sets conservative exposure limits to prevent over/under-exposure:
+
+- **Exposure time**: 13 µs to 33 ms (13000 to 33000000 nanoseconds)
+- **Analog gain**: 1x to 16x
+- **Digital gain**: 1x to 4x
+
+These ranges allow the camera to adapt to various lighting conditions (indoor/outdoor, day/night) while staying within reasonable noise levels.
+
+### Why Not Manual Exposure?
+Manual exposure (`aelock=true`) would eliminate flicker entirely, but:
+- Requires frequent manual adjustments as lighting changes
+- No adaptation to shadows, clouds, or time-of-day changes
+- More maintenance burden for operators
+
+Auto-exposure with synchronized compensation provides the best balance of stability and adaptability.
+
 ## Troubleshooting
 
 ### Preview won't start: "no property src-crop"
