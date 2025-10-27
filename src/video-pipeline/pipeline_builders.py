@@ -173,7 +173,7 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
         [
             source_section,
             "x264enc name=enc speed-preset=ultrafast tune=zerolatency ",
-            "bitrate=12000 key-int-max=60 b-adapt=false bframes=0 ",
+            "bitrate=30000 key-int-max=60 b-adapt=false bframes=0 ",
             "aud=true byte-stream=false option-string=repeat-headers=1:scenecut=0:open-gop=0 ! ",
             "h264parse config-interval=-1 disable-passthrough=true ! ",
             "video/x-h264,stream-format=avc ! ",
@@ -200,7 +200,7 @@ def build_preview_pipeline(camera_id: int, hls_location: str, config_path: str =
         [
             source_section,
             "x264enc name=enc speed-preset=ultrafast tune=zerolatency ",
-            "bitrate=3000 key-int-max=60 b-adapt=false bframes=0 ",
+            "bitrate=6000 key-int-max=60 b-adapt=false bframes=0 ",
             "byte-stream=true aud=true intra-refresh=false ",
             "option-string=repeat-headers=1:scenecut=0:open-gop=0 ! ",
             "h264parse config-interval=1 disable-passthrough=true ! ",
