@@ -10,7 +10,7 @@ from typing import Any, Dict, Tuple
 # Camera sensor characteristics (IMX274 – 4K @ 30fps)
 SENSOR_WIDTH = 3840
 SENSOR_HEIGHT = 2160
-SENSOR_FRAMERATE = "25/1"  # Changed from 30/1 - camera delivers ~25fps consistently
+SENSOR_FRAMERATE = "30/1"  # Requires MAXN power mode (1728MHz) for dual-camera
 SENSOR_FORMAT = "NV12"
 
 

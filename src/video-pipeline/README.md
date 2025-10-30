@@ -18,29 +18,30 @@ Both pipelines use **VIC (Video Image Compositor)** hardware acceleration for ze
 ### Recording Pipeline
 
 ```
-nvarguscamerasrc (3840×2160 @ 25 fps NV12, memory:NVMM) →
+nvarguscamerasrc (3840×2160 @ 30 fps NV12, memory:NVMM) →
 nvvidconv [VIC crop in NVMM] (left=480, right=3360, top=272, bottom=1888) →
   output: 2880×1616 NV12 in NVMM →
 nvvidconv [VIC color conversion] (NVMM NV12 → CPU I420) →
-videorate (enforce constant 25 fps) →
+videorate (enforce constant 30 fps) →
 x264enc (30 Mbps VBR, key-int=60, zerolatency) →
 h264parse (AVC stream-format) →
 splitmuxsink (10-minute MP4 segments: cam{N}_{timestamp}_%02d.mp4)
 ```
 
 **Key Settings:**
-- **25 fps constant** - Camera delivers ~25fps, videorate enforces it
+- **30 fps constant** - Full framerate with MAXN power mode
 - **30 Mbps VBR** - Variable bitrate adapts to scene complexity, FPS stays constant
 - **Digital gain: 1x** - No digital gain to preserve quality
+- **Power mode: MAXN** - CPU @ 1728MHz required for dual-camera 30fps
 
 ### Preview Pipeline
 
 ```
-nvarguscamerasrc (3840×2160 @ 25 fps NV12, memory:NVMM) →
+nvarguscamerasrc (3840×2160 @ 30 fps NV12, memory:NVMM) →
 nvvidconv [VIC crop in NVMM] (left=480, right=3360, top=272, bottom=1888) →
   output: 2880×1616 NV12 in NVMM →
 nvvidconv [VIC color conversion] (NVMM NV12 → CPU I420) →
-videorate (enforce constant 25 fps) →
+videorate (enforce constant 30 fps) →
 x264enc (6 Mbps VBR, byte-stream=true) →
 h264parse (config-interval=1) →
 hlssink2 (/dev/shm/hls/cam{N}.m3u8, 2 s segments)
