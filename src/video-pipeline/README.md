@@ -18,23 +18,30 @@ Both pipelines use **VIC (Video Image Compositor)** hardware acceleration for ze
 ### Recording Pipeline
 
 ```
-nvarguscamerasrc (3840×2160 @ 30 fps NV12, memory:NVMM) →
+nvarguscamerasrc (3840×2160 @ 25 fps NV12, memory:NVMM) →
 nvvidconv [VIC crop in NVMM] (left=480, right=3360, top=272, bottom=1888) →
   output: 2880×1616 NV12 in NVMM →
 nvvidconv [VIC color conversion] (NVMM NV12 → CPU I420) →
-x264enc (12 Mbps, key-int=60, zerolatency) →
+videorate (enforce constant 25 fps) →
+x264enc (30 Mbps VBR, key-int=60, zerolatency) →
 h264parse (AVC stream-format) →
 splitmuxsink (10-minute MP4 segments: cam{N}_{timestamp}_%02d.mp4)
 ```
 
+**Key Settings:**
+- **25 fps constant** - Camera delivers ~25fps, videorate enforces it
+- **30 Mbps VBR** - Variable bitrate adapts to scene complexity, FPS stays constant
+- **Digital gain: 1x** - No digital gain to preserve quality
+
 ### Preview Pipeline
 
 ```
-nvarguscamerasrc (3840×2160 @ 30 fps NV12, memory:NVMM) →
+nvarguscamerasrc (3840×2160 @ 25 fps NV12, memory:NVMM) →
 nvvidconv [VIC crop in NVMM] (left=480, right=3360, top=272, bottom=1888) →
   output: 2880×1616 NV12 in NVMM →
 nvvidconv [VIC color conversion] (NVMM NV12 → CPU I420) →
-x264enc (3 Mbps, byte-stream=true) →
+videorate (enforce constant 25 fps) →
+x264enc (6 Mbps VBR, byte-stream=true) →
 h264parse (config-interval=1) →
 hlssink2 (/dev/shm/hls/cam{N}.m3u8, 2 s segments)
 ```
@@ -224,9 +231,9 @@ The pipeline sets conservative exposure limits to prevent over/under-exposure:
 
 - **Exposure time**: 13 µs to 33 ms (13000 to 33000000 nanoseconds)
 - **Analog gain**: 1x to 16x
-- **Digital gain**: 1x to 4x
+- **Digital gain**: 1x (FIXED) - digital gain is disabled to prevent quality degradation
 
-These ranges allow the camera to adapt to various lighting conditions (indoor/outdoor, day/night) while staying within reasonable noise levels.
+**Why no digital gain?** Digital gain amplifies the signal after sensor readout, which amplifies noise and reduces image quality. We rely on exposure time and analog gain only, which provide cleaner results.
 
 ### Why Not Manual Exposure?
 Manual exposure (`aelock=true`) would eliminate flicker entirely, but:

@@ -10,7 +10,7 @@ from typing import Any, Dict, Tuple
 # Camera sensor characteristics (IMX274 – 4K @ 30fps)
 SENSOR_WIDTH = 3840
 SENSOR_HEIGHT = 2160
-SENSOR_FRAMERATE = "30/1"
+SENSOR_FRAMERATE = "25/1"  # Changed from 30/1 - camera delivers ~25fps consistently
 SENSOR_FORMAT = "NV12"
 
 
@@ -147,7 +147,7 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
         "tnr-mode=0 ee-mode=0 wbmode=1 aelock=false "
         f"aeantibanding=3 exposurecompensation={exposure_compensation} "
         'exposuretimerange="13000 33000000" gainrange="1 16" '
-        'ispdigitalgainrange="1 4" saturation=1.0 ! '
+        'ispdigitalgainrange="1 1" saturation=1.0 ! '
         f"video/x-raw(memory:NVMM),width={SENSOR_WIDTH},height={SENSOR_HEIGHT},"
         f"framerate={SENSOR_FRAMERATE},format={SENSOR_FORMAT} ! "
 
@@ -160,6 +160,9 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
         "nvvidconv ! "
         f"video/x-raw,format=I420,width={output_width},height={output_height},"
         f"framerate={SENSOR_FRAMERATE},colorimetry=bt709,interlace-mode=progressive ! "
+
+        # Enforce constant framerate (drop/duplicate frames as needed)
+        f"videorate ! video/x-raw,framerate={SENSOR_FRAMERATE} ! "
     )
 
     return pipeline, output_width, output_height
