@@ -113,6 +113,7 @@ class ExposureSyncService:
                     continue
 
                 # Perform adjustment
+                logger.info(f"Attempting exposure adjustment (elapsed: {elapsed:.1f}s)")
                 self._perform_adjustment()
 
                 with self.lock:
@@ -132,7 +133,10 @@ class ExposureSyncService:
 
         if not preview_pipelines:
             # No preview active, skip adjustment
+            logger.debug("No preview pipelines active, skipping adjustment")
             return
+
+        logger.debug(f"Found {len(preview_pipelines)} preview pipelines active")
 
         # Analyze brightness from recent HLS segments
         brightness_readings = []
@@ -141,9 +145,10 @@ class ExposureSyncService:
             brightness = self._analyze_camera_brightness(cam_id)
             if brightness is not None:
                 brightness_readings.append(brightness)
+                logger.info(f"Camera {cam_id} brightness: {brightness:.1f}")
 
         if not brightness_readings:
-            logger.debug("No brightness readings available, skipping adjustment")
+            logger.info("No brightness readings available, skipping adjustment")
             return
 
         # Calculate average brightness across cameras
@@ -194,9 +199,6 @@ class ExposureSyncService:
         Returns:
             Average brightness (0-255) or None if analysis failed
         """
-        # Find most recent segment
-        segment_pattern = self.hls_base_dir / f"cam{camera_id}_*.ts"
-
         try:
             # Get most recent segment (by modification time)
             segments = list(self.hls_base_dir.glob(f"cam{camera_id}_*.ts"))
@@ -205,26 +207,30 @@ class ExposureSyncService:
 
             latest_segment = max(segments, key=lambda p: p.stat().st_mtime)
 
-            # Use ffmpeg to analyze brightness (YAVG = average luminance)
+            # Extract a downscaled grayscale frame and calculate average pixel value
+            # This is much more reliable than signalstats which doesn't log properly
             cmd = [
                 'ffmpeg', '-i', str(latest_segment),
-                '-vframes', '1', '-vf', 'signalstats',
-                '-f', 'null', '-'
+                '-vf', 'scale=100:100,format=gray',  # Small grayscale frame
+                '-vframes', '1',
+                '-f', 'rawvideo',  # Raw pixel data
+                '-'
             ]
 
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
                 timeout=2.0
             )
 
-            # Parse YAVG from stderr
-            for line in result.stderr.split('\n'):
-                if 'lavfi.signalstats.YAVG' in line:
-                    # Format: [Parsed_signalstats_0 @ ...] lavfi.signalstats.YAVG=128.5
-                    brightness = float(line.split('YAVG=')[1].split()[0])
-                    return brightness
+            if result.returncode != 0 or not result.stdout:
+                return None
+
+            # Calculate average brightness from raw pixel data
+            pixels = result.stdout
+            if pixels:
+                avg_brightness = sum(pixels) / len(pixels)
+                return avg_brightness
 
             return None
 
