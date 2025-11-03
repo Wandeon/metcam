@@ -13,6 +13,7 @@ from threading import Lock
 
 from gstreamer_manager import GStreamerManager, PipelineState
 from pipeline_builders import build_preview_pipeline
+from exposure_sync_service import get_exposure_sync_service
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,13 @@ class PreviewService:
                     'message': 'Failed to start any preview cameras',
                     'failed_cameras': failed_cameras
                 }
-            
+
+            # Start exposure synchronization service
+            exposure_service = get_exposure_sync_service(self.gst_manager)
+            if exposure_service:
+                exposure_service.start()
+                logger.info("Exposure synchronization service started")
+
             return {
                 'success': True,
                 'message': f'Preview started for cameras: {started_cameras}',
@@ -201,7 +208,14 @@ class PreviewService:
                     'message': 'No preview cameras were stopped',
                     'failed_cameras': failed_cameras
                 }
-            
+
+            # Stop exposure synchronization if all cameras stopped
+            if camera_id is None or len(stopped_cameras) == len(self.camera_ids):
+                exposure_service = get_exposure_sync_service()
+                if exposure_service:
+                    exposure_service.stop()
+                    logger.info("Exposure synchronization service stopped")
+
             return {
                 'success': True,
                 'message': f'Preview stopped for cameras: {stopped_cameras}',
