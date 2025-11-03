@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 
-# Camera sensor characteristics (IMX274 – 4K @ 30fps)
+# Camera sensor characteristics (IMX477 – 12.3MP sensor in 4K mode)
+# Using sensor-mode=0 which provides 3840×2160@30fps
 SENSOR_WIDTH = 3840
 SENSOR_HEIGHT = 2160
-SENSOR_FRAMERATE = "30/1"  # Requires MAXN power mode (1728MHz) for dual-camera
 SENSOR_FORMAT = "NV12"
 
 
@@ -149,20 +149,17 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
         'exposuretimerange="13000 33000000" gainrange="1 16" '
         'ispdigitalgainrange="1 1" saturation=1.0 ! '
         f"video/x-raw(memory:NVMM),width={SENSOR_WIDTH},height={SENSOR_HEIGHT},"
-        f"framerate={SENSOR_FRAMERATE},format={SENSOR_FORMAT} ! "
+        f"format={SENSOR_FORMAT} ! "
 
         # VIC crop in NVMM
         f"nvvidconv name=cropper{cropper_props} ! "
         f"video/x-raw(memory:NVMM),format={SENSOR_FORMAT},width={output_width},"
-        f"height={output_height},framerate={SENSOR_FRAMERATE} ! "
+        f"height={output_height} ! "
 
         # Hardware colour conversion to CPU memory for x264enc
         "nvvidconv ! "
         f"video/x-raw,format=I420,width={output_width},height={output_height},"
-        f"framerate={SENSOR_FRAMERATE},colorimetry=bt709,interlace-mode=progressive ! "
-
-        # Enforce constant framerate (drop/duplicate frames as needed)
-        f"videorate ! video/x-raw,framerate={SENSOR_FRAMERATE} ! "
+        f"colorimetry=bt709,interlace-mode=progressive ! "
     )
 
     return pipeline, output_width, output_height
@@ -179,8 +176,8 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
     pipeline = "".join(
         [
             source_section,
-            "x264enc name=enc speed-preset=ultrafast tune=zerolatency ",
-            "bitrate=30000 key-int-max=60 b-adapt=false bframes=0 ",
+            "x264enc name=enc speed-preset=ultrafast tune=zerolatency threads=0 ",
+            "bitrate=20000 key-int-max=50 b-adapt=false bframes=0 ",
             "aud=true byte-stream=false option-string=repeat-headers=1:scenecut=0:open-gop=0 ! ",
             "h264parse config-interval=-1 disable-passthrough=true ! ",
             "video/x-h264,stream-format=avc ! ",
@@ -206,7 +203,7 @@ def build_preview_pipeline(camera_id: int, hls_location: str, config_path: str =
     pipeline = "".join(
         [
             source_section,
-            "x264enc name=enc speed-preset=ultrafast tune=zerolatency ",
+            "x264enc name=enc speed-preset=ultrafast tune=zerolatency threads=0 ",
             "bitrate=6000 key-int-max=60 b-adapt=false bframes=0 ",
             "byte-stream=true aud=true intra-refresh=false ",
             "option-string=repeat-headers=1:scenecut=0:open-gop=0 ! ",

@@ -17,6 +17,8 @@ Both pipelines use **VIC (Video Image Compositor)** hardware acceleration for ze
 
 ### Recording Pipeline
 
+**Sensor: Sony IMX477 (12.3MP) in 4K mode (sensor-mode=0)**
+
 ```
 nvarguscamerasrc (3840×2160 @ 30 fps NV12, memory:NVMM) →
 nvvidconv [VIC crop in NVMM] (left=480, right=3360, top=272, bottom=1888) →
