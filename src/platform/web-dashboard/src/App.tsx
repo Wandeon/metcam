@@ -7,11 +7,12 @@ import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Dashboard } from '@/pages/Dashboard';
 import { MatchesEnhanced as Matches } from '@/pages/MatchesEnhanced';
 import { Preview } from '@/pages/Preview';
+import { Panorama } from '@/pages/Panorama';
 import { Development } from '@/pages/Development';
 import { Logs } from '@/pages/Logs';
 import { Health } from '@/pages/Health';
 import { Login } from '@/pages/Login';
-import { Video, Home, Film, Eye, Code, FileText, Activity, LogOut, Menu, X, RefreshCw } from 'lucide-react';
+import { Video, Home, Film, Eye, Code, FileText, Activity, LogOut, Menu, X, RefreshCw, Layers } from 'lucide-react';
 import { apiService } from '@/services/api';
 
 function App() {
@@ -108,6 +109,12 @@ function App() {
                 onClick={() => setSidebarOpen(false)}
               />
               <NavLink
+                to="/panorama"
+                icon={<Layers className="w-5 h-5" />}
+                label="Panorama"
+                onClick={() => setSidebarOpen(false)}
+              />
+              <NavLink
                 to="/matches"
                 icon={<Film />}
                 label="Matches"
@@ -171,6 +178,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/preview" element={<Preview />} />
+            <Route path="/panorama" element={<Panorama />} />
             <Route path="/matches" element={<Matches />} />
             <Route path="/health" element={<Health />} />
             <Route path="/logs" element={<Logs />} />

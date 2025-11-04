@@ -12,6 +12,17 @@ import type {
   PresetDeleteResponse,
   ApplyConfigResponse,
 } from '../types/camera';
+import type {
+  PanoramaStatus,
+  PanoramaConfig,
+  PanoramaStats,
+  CalibrationStatus,
+  CalibrationProgress,
+  CalibrationResult,
+  PreviewResponse,
+  ProcessingStatus,
+  ApiResponse,
+} from '../types/panorama';
 
 const API_BASE_URL = '/api/v1';
 
@@ -393,7 +404,77 @@ export const apiService = {
     return response.data;
   },
 
+  // ========================================================================
+  // Panorama stitching endpoints
+  // ========================================================================
+
+  // Panorama Status & Config
+  async getPanoramaStatus(): Promise<PanoramaStatus> {
+    const response = await api.get<PanoramaStatus>('/panorama/status');
+    return response.data;
+  },
+
+  async getPanoramaConfig(): Promise<PanoramaConfig> {
+    const response = await api.get<PanoramaConfig>('/panorama/config');
+    return response.data;
+  },
+
+  async getPanoramaStats(): Promise<PanoramaStats> {
+    const response = await api.get<PanoramaStats>('/panorama/stats');
+    return response.data;
+  },
+
+  // Calibration
+  async getCalibrationStatus(): Promise<CalibrationStatus> {
+    const response = await api.get<CalibrationStatus>('/panorama/calibration');
+    return response.data;
+  },
+
+  async startCalibration(): Promise<ApiResponse> {
+    const response = await api.post<ApiResponse>('/panorama/calibration/start');
+    return response.data;
+  },
+
+  async captureCalibrationFrame(): Promise<CalibrationProgress> {
+    const response = await api.post<CalibrationProgress>('/panorama/calibration/capture');
+    return response.data;
+  },
+
+  async completeCalibration(): Promise<CalibrationResult> {
+    const response = await api.post<CalibrationResult>('/panorama/calibration/complete');
+    return response.data;
+  },
+
+  async clearCalibration(): Promise<ApiResponse> {
+    const response = await api.delete<ApiResponse>('/panorama/calibration');
+    return response.data;
+  },
+
+  // Preview
+  async startPanoramaPreview(): Promise<PreviewResponse> {
+    const response = await api.post<PreviewResponse>('/panorama/preview/start');
+    return response.data;
+  },
+
+  async stopPanoramaPreview(): Promise<ApiResponse> {
+    const response = await api.post<ApiResponse>('/panorama/preview/stop');
+    return response.data;
+  },
+
+  // Post-Processing
+  async processPanoramaRecording(matchId: string): Promise<ApiResponse> {
+    const response = await api.post<ApiResponse>('/panorama/process', { match_id: matchId });
+    return response.data;
+  },
+
+  async getPanoramaProcessingStatus(matchId: string): Promise<ProcessingStatus> {
+    const response = await api.get<ProcessingStatus>(`/panorama/process/${matchId}/status`);
+    return response.data;
+  },
+
+  // ========================================================================
   // Development API methods
+  // ========================================================================
   async getDevStatus(): Promise<any> {
     const response = await api.get('/dev/status');
     return response.data;
