@@ -16,7 +16,7 @@ fi
 
 # Paths
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-API_SCRIPT="$REPO_DIR/src/platform/simple_api_enhanced.py"
+API_SCRIPT="$REPO_DIR/src/platform/simple_api_v3.py"
 SERVICE_NAME="footballvision-api-enhanced"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 

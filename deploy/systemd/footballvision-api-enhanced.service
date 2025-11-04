@@ -18,7 +18,7 @@ Environment="PYTHONPATH=/home/mislav/footballvision-pro/src"
 Environment="PYTHONUNBUFFERED=1"
 
 # Main service
-ExecStart=/usr/bin/python3 /home/mislav/footballvision-pro/src/platform/simple_api_enhanced.py
+ExecStart=/usr/bin/python3 /home/mislav/footballvision-pro/src/platform/simple_api_v3.py
 
 # Pre-start actions
 ExecStartPre=/bin/bash -c 'mkdir -p /var/log/footballvision/{api,system,crashes}'

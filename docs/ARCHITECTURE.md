@@ -99,36 +99,6 @@ Successfully redesigned FootballVision Pro from **subprocess-based scripts** to 
      - Graceful shutdown handling
      - SIGTERM/SIGINT cleanup
 
-## Architecture Comparison
-
-### Old (Subprocess-based)
-
-```
-API Request → Subprocess → Shell Script → GStreamer Pipeline
-```
-
-**Problems**:
-- 3s artificial delay on start
-- 15s artificial delay on stop
-- Process management complexity
-- State synchronization issues
-- PID file fragility
-- Page refresh kills recording
-
-### New (In-process)
-
-```
-API Request → Service Method → GStreamerManager → GStreamer Pipeline
-```
-
-**Benefits**:
-- Instant start (~100ms)
-- Fast stop (~2s EOS)
-- No process management
-- Built-in state persistence
-- Thread-safe
-- Survives page refreshes
-
 ## API Changes
 
 ### Recording Endpoints
@@ -334,41 +304,6 @@ ls -lh /mnt/recordings/test_v3/segments/
    - Check status - recording should still show as active
    - Verify pipeline status with `get_status()`
 
-## Migration Plan
-
-### Option 1: Gradual Migration (Recommended)
-
-1. **Test API v3 in parallel** (port 8001):
-   ```bash
-   # Modify simple_api_v3.py line 354: port=8001
-   # Start on different port
-   python3 simple_api_v3.py
-   ```
-
-2. **Test thoroughly** with both APIs running
-
-3. **Update systemd service** once validated:
-   ```bash
-   sudo systemctl edit footballvision-api-enhanced.service
-   # Change ExecStart to use simple_api_v3.py
-   sudo systemctl daemon-reload
-   sudo systemctl restart footballvision-api-enhanced
-   ```
-
-### Option 2: Direct Switch
-
-1. **Stop current API**:
-   ```bash
-   sudo systemctl stop footballvision-api-enhanced
-   ```
-
-2. **Update systemd service** to use simple_api_v3.py
-
-3. **Start new API**:
-   ```bash
-   sudo systemctl start footballvision-api-enhanced
-   ```
-
 ## Known Limitations
 
 1. **Preview and recording are mutually exclusive** ⭐:
@@ -393,15 +328,6 @@ ls -lh /mnt/recordings/test_v3/segments/
    - Mode switching can be added if needed
 
 ## Performance Metrics
-
-### Timing Improvements
-
-| Operation | Old (subprocess) | New (in-process) | Improvement |
-|-----------|-----------------|------------------|-------------|
-| Start recording | 3000ms | ~100ms | 30x faster |
-| Stop recording | 15000ms | ~2000ms | 7.5x faster |
-| Get status | ~200ms | ~10ms | 20x faster |
-| Start preview | ~500ms | ~100ms | 5x faster |
 
 - Target: 30 fps
 - Expected: 25-27 fps (validated with the software crop pipeline)
