@@ -52,6 +52,9 @@ from pipeline_manager import pipeline_manager, PipelineMode
 # Import development router
 from dev_router import dev_router
 
+# Import panorama router
+from panorama_router import router as panorama_router
+
 app = FastAPI(
     title="FootballVision Pro API v3",
     description="In-process GStreamer for instant, bulletproof operations",
@@ -69,6 +72,9 @@ app.add_middleware(
 
 # Include development router
 app.include_router(dev_router)
+
+# Include panorama router
+app.include_router(panorama_router)
 
 # Clean up any stale locks from previous runs
 try:

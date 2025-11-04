@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "enabled": false,
+  "calibration": {
+    "calibrated": false,
+    "homography_cam1_to_cam0": null,
+    "overlap_region": {
+      "start_x": 2200,
+      "end_x": 2880,
+      "width": 680
+    },
+    "blend_width": 150,
+    "quality_score": 0.0,
+    "calibration_date": null
+  },
+  "output": {
+    "width": 3840,
+    "height": 1315,
+    "fps": 30
+  },
+  "performance": {
+    "preview_fps_target": 15,
+    "use_vic_backend": true,
+    "use_cuda_backend": true,
+    "buffer_size": 4,
+    "sync_tolerance_ms": 33.0
+  }
+}
