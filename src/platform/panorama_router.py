@@ -422,16 +422,8 @@ async def get_processing_status(match_id: str):
     Returns progress information for panorama post-processing.
     """
     try:
-        # TODO: Implement actual processing status tracking
-        # For now, return stub response with frontend-compatible fields
-        return {
-            'processing': False,
-            'progress': 0,
-            'eta_seconds': None,
-            'completed': False,
-            'error': None,
-            'message': 'Processing status tracking not yet implemented'
-        }
+        status = panorama_service.get_processing_status(match_id)
+        return status
     except Exception as e:
         logger.error(f"Error getting processing status: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -124,6 +124,9 @@ class PanoramaService:
         self.capture_pipelines = {}  # {camera_id: pipeline_name}
         self.output_pipeline = None
 
+        # Post-processing state tracking
+        self.processing_state = {}  # {match_id: {processing, progress, completed, error, eta_seconds}}
+
         # Load persisted state
         self._load_state()
 
@@ -597,24 +600,38 @@ class PanoramaService:
                     'error_code': 'NO_SEGMENTS'
                 }
 
-            # TODO: Implement actual post-processing
-            # 1. Extract frames from both cameras
-            # 2. Synchronize frames using FrameSynchronizer
-            # 3. Stitch frame pairs using VPIStitcher
-            # 4. Encode to video
-            # 5. Save as panorama_archive.mp4
+            # Load stitcher if not loaded
+            if not self._load_stitcher():
+                return {
+                    'success': False,
+                    'message': 'Failed to initialize stitcher',
+                    'error_code': 'STITCHER_INIT_FAILED'
+                }
 
-            logger.info(f"Post-processing requested for match {match_id}")
+            logger.info(f"Starting post-processing for match {match_id}")
             logger.info(f"Cam0 segments: {len(cam0_segments)}")
             logger.info(f"Cam1 segments: {len(cam1_segments)}")
 
+            # Start post-processing in background thread
+            processing_thread = threading.Thread(
+                target=self._process_recording_thread,
+                args=(match_id, cam0_segments, cam1_segments),
+                daemon=False,
+                name=f"PanoramaProcess-{match_id}"
+            )
+            processing_thread.start()
+
+            # Estimate duration (rough: 1 minute per 5 minutes of footage)
+            total_segments = len(cam0_segments) + len(cam1_segments)
+            estimated_minutes = max(1, total_segments // 10)
+
             return {
                 'success': True,
-                'message': 'Processing started (not implemented yet)',
+                'message': 'Processing started',
                 'match_id': match_id,
                 'cam0_segments': len(cam0_segments),
                 'cam1_segments': len(cam1_segments),
-                'estimated_duration_minutes': 0  # Placeholder
+                'estimated_duration_minutes': estimated_minutes
             }
 
         except Exception as e:
@@ -623,6 +640,37 @@ class PanoramaService:
                 'success': False,
                 'message': f'Error processing recording: {str(e)}'
             }
+
+    def get_processing_status(self, match_id: str) -> Dict:
+        """
+        Get processing status for a match
+
+        Args:
+            match_id: Match identifier
+
+        Returns:
+            Status dictionary with progress information
+        """
+        if match_id not in self.processing_state:
+            return {
+                'processing': False,
+                'progress': 0,
+                'eta_seconds': None,
+                'completed': False,
+                'error': None,
+                'message': f'No processing found for match {match_id}'
+            }
+
+        state = self.processing_state[match_id]
+        return {
+            'processing': state.get('processing', False),
+            'progress': state.get('progress', 0),
+            'eta_seconds': state.get('eta_seconds'),
+            'completed': state.get('completed', False),
+            'error': state.get('error'),
+            'total_frames': state.get('total_frames', 0),
+            'message': 'Processing in progress' if state.get('processing') else 'Processing completed'
+        }
 
     def start_calibration(self) -> Dict:
         """
@@ -1104,6 +1152,201 @@ class PanoramaService:
 
         except Exception as e:
             logger.error(f"Error pushing panorama frame: {e}", exc_info=True)
+
+    def _process_recording_thread(self, match_id: str, cam0_segments: List[str], cam1_segments: List[str]):
+        """
+        Background thread for post-processing recorded match
+
+        Extracts frames from segments, stitches them, and encodes to video.
+
+        Args:
+            match_id: Match identifier
+            cam0_segments: List of cam0 segment file paths
+            cam1_segments: List of cam1 segment file paths
+        """
+        try:
+            logger.info(f"Post-processing thread started for {match_id}")
+            output_path = Path("/mnt/recordings") / match_id / "panorama_archive.mp4"
+
+            # Initialize processing state
+            self.processing_state[match_id] = {
+                'processing': True,
+                'progress': 0,
+                'completed': False,
+                'error': None,
+                'eta_seconds': None,
+                'start_time': time.time()
+            }
+
+            total_frames = 0
+            processed_frames = 0
+
+            # Create output encoder pipeline
+            output_width = self.config_manager.config['output']['width']
+            output_height = self.config_manager.config['output']['height']
+            output_fps = 30  # Target output FPS
+
+            encoder_pipeline_str = (
+                f"appsrc name=panorama_source is-live=false do-timestamp=true "
+                f"format=time stream-type=stream "
+                f"caps=video/x-raw,format=I420,width={output_width},height={output_height},"
+                f"framerate={output_fps}/1 ! "
+                f"nvv4l2h264enc bitrate=8000000 ! "
+                f"h264parse ! "
+                f"mp4mux ! "
+                f"filesink location={output_path}"
+            )
+
+            # Create encoder pipeline
+            encoder_created = self.gst_manager.create_pipeline(
+                name=f'panorama_encode_{match_id}',
+                pipeline_description=encoder_pipeline_str,
+                on_eos=lambda name: logger.info(f"Encoder EOS: {name}"),
+                on_error=lambda name, err: logger.error(f"Encoder error: {name} - {err}"),
+                metadata={'match_id': match_id}
+            )
+
+            if not encoder_created:
+                raise Exception("Failed to create encoder pipeline")
+
+            if not self.gst_manager.start_pipeline(f'panorama_encode_{match_id}'):
+                raise Exception("Failed to start encoder pipeline")
+
+            logger.info("Encoder pipeline started")
+
+            # Get appsrc from encoder
+            with self.gst_manager.pipelines_lock:
+                encoder_pipeline = self.gst_manager.pipelines[f'panorama_encode_{match_id}']['pipeline']
+                appsrc = encoder_pipeline.get_by_name('panorama_source')
+
+            # Process each segment pair
+            min_segments = min(len(cam0_segments), len(cam1_segments))
+
+            for seg_idx in range(min_segments):
+                cam0_seg = cam0_segments[seg_idx]
+                cam1_seg = cam1_segments[seg_idx]
+
+                logger.info(f"Processing segment {seg_idx+1}/{min_segments}: {Path(cam0_seg).name}, {Path(cam1_seg).name}")
+
+                # Extract and stitch frames from this segment pair
+                frames_in_segment = self._process_segment_pair(cam0_seg, cam1_seg, appsrc, output_fps)
+
+                processed_frames += frames_in_segment
+                progress = int((seg_idx + 1) / min_segments * 100)
+
+                # Update progress
+                self.processing_state[match_id]['progress'] = progress
+                elapsed = time.time() - self.processing_state[match_id]['start_time']
+                if progress > 0:
+                    eta = (elapsed / progress) * (100 - progress)
+                    self.processing_state[match_id]['eta_seconds'] = int(eta)
+
+                logger.info(f"Progress: {progress}%, processed {processed_frames} frames")
+
+            # Send EOS to encoder
+            logger.info("Sending EOS to encoder pipeline")
+            appsrc.emit('end-of-stream')
+
+            # Wait for encoding to finish (max 60 seconds)
+            time.sleep(2)
+            self.gst_manager.stop_pipeline(f'panorama_encode_{match_id}')
+
+            # Update final state
+            self.processing_state[match_id].update({
+                'processing': False,
+                'progress': 100,
+                'completed': True,
+                'total_frames': processed_frames
+            })
+
+            logger.info(f"Post-processing complete for {match_id}: {processed_frames} frames, output: {output_path}")
+
+        except Exception as e:
+            logger.error(f"Post-processing failed for {match_id}: {e}", exc_info=True)
+            self.processing_state[match_id].update({
+                'processing': False,
+                'completed': False,
+                'error': str(e)
+            })
+
+    def _process_segment_pair(self, cam0_path: str, cam1_path: str, appsrc, output_fps: int) -> int:
+        """
+        Extract frames from segment pair, stitch, and push to encoder
+
+        Args:
+            cam0_path: Path to cam0 segment
+            cam1_path: Path to cam1 segment
+            appsrc: GStreamer appsrc element for encoder
+            output_fps: Target output framerate
+
+        Returns:
+            Number of frames processed
+        """
+        import cv2
+
+        frames_processed = 0
+
+        try:
+            # Open both videos
+            cap0 = cv2.VideoCapture(cam0_path)
+            cap1 = cv2.VideoCapture(cam1_path)
+
+            if not cap0.isOpened() or not cap1.isOpened():
+                logger.error(f"Failed to open segment videos: {cam0_path}, {cam1_path}")
+                return 0
+
+            # Get frame counts
+            total_frames = int(min(cap0.get(cv2.CAP_PROP_FRAME_COUNT), cap1.get(cv2.CAP_PROP_FRAME_COUNT)))
+            logger.info(f"Segment has {total_frames} frames")
+
+            # Process frames
+            frame_idx = 0
+            while True:
+                # Read frames
+                ret0, frame0 = cap0.read()
+                ret1, frame1 = cap1.read()
+
+                if not ret0 or not ret1:
+                    break
+
+                # Stitch frames
+                panorama = self.stitcher.stitch(frame0, frame1)
+                if panorama is None:
+                    logger.warning(f"Stitching failed for frame {frame_idx}")
+                    continue
+
+                # Convert to I420 for encoder
+                panorama_yuv = cv2.cvtColor(panorama, cv2.COLOR_BGR2YUV_I420)
+
+                # Create GStreamer buffer
+                timestamp_ns = int(frame_idx * (1000000000 / output_fps))
+                buffer = Gst.Buffer.new_allocate(None, len(panorama_yuv.tobytes()), None)
+
+                success, map_info = buffer.map(Gst.MapFlags.WRITE)
+                if success:
+                    map_info.data[:] = panorama_yuv.tobytes()
+                    buffer.unmap(map_info)
+                    buffer.pts = timestamp_ns
+                    buffer.dts = Gst.CLOCK_TIME_NONE
+                    buffer.duration = Gst.CLOCK_TIME_NONE
+
+                    # Push to encoder
+                    ret = appsrc.emit('push-buffer', buffer)
+                    if ret != Gst.FlowReturn.OK:
+                        logger.warning(f"Failed to push buffer: {ret}")
+
+                frames_processed += 1
+                frame_idx += 1
+
+            cap0.release()
+            cap1.release()
+
+            logger.info(f"Processed {frames_processed} frames from segment")
+            return frames_processed
+
+        except Exception as e:
+            logger.error(f"Error processing segment pair: {e}", exc_info=True)
+            return frames_processed
 
     def _cleanup_preview(self):
         """
