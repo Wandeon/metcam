@@ -232,6 +232,32 @@ async def capture_calibration_frame():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/calibration/reset")
+async def reset_calibration():
+    """
+    Reset/cancel calibration in progress
+
+    Clears all captured calibration frames and exits calibration mode.
+    Use this to start over if you captured bad frames or want to cancel.
+    """
+    try:
+        result = panorama_service.reset_calibration()
+
+        if result.get('success'):
+            return result
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=result.get('message', 'Failed to reset calibration')
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resetting calibration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/calibration/complete")
 async def complete_calibration():
     """

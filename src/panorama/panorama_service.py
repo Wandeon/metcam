@@ -857,6 +857,40 @@ class PanoramaService:
                 'message': f'Error capturing frame: {str(e)}'
             }
 
+    def reset_calibration(self) -> Dict:
+        """
+        Reset/cancel calibration in progress
+
+        Clears all captured calibration frames and exits calibration mode.
+        Use this to start over if you captured bad frames.
+
+        Returns:
+            Result dictionary with success status
+        """
+        try:
+            if self.calibration_service is None:
+                return {
+                    'success': False,
+                    'message': 'Calibration service not available'
+                }
+
+            # Reset calibration service (clears frames and exits calibration mode)
+            self.calibration_service.reset()
+
+            logger.info("Calibration reset successfully")
+
+            return {
+                'success': True,
+                'message': 'Calibration reset successfully. You can start a new calibration.'
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to reset calibration: {e}", exc_info=True)
+            return {
+                'success': False,
+                'message': f'Error resetting calibration: {str(e)}'
+            }
+
     def complete_calibration(self) -> Dict:
         """
         Complete calibration and calculate homography
