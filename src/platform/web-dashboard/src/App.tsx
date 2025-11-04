@@ -9,8 +9,9 @@ import { MatchesEnhanced as Matches } from '@/pages/MatchesEnhanced';
 import { Preview } from '@/pages/Preview';
 import { Development } from '@/pages/Development';
 import { Logs } from '@/pages/Logs';
+import { Health } from '@/pages/Health';
 import { Login } from '@/pages/Login';
-import { Video, Home, Film, Eye, Code, FileText, LogOut, Menu, X, RefreshCw } from 'lucide-react';
+import { Video, Home, Film, Eye, Code, FileText, Activity, LogOut, Menu, X, RefreshCw } from 'lucide-react';
 import { apiService } from '@/services/api';
 
 function App() {
@@ -113,6 +114,12 @@ function App() {
                 onClick={() => setSidebarOpen(false)}
               />
               <NavLink
+                to="/health"
+                icon={<Activity />}
+                label="Health"
+                onClick={() => setSidebarOpen(false)}
+              />
+              <NavLink
                 to="/logs"
                 icon={<FileText />}
                 label="Logs"
@@ -165,6 +172,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/preview" element={<Preview />} />
             <Route path="/matches" element={<Matches />} />
+            <Route path="/health" element={<Health />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/development" element={<Development />} />
             <Route path="*" element={<Navigate to="/" replace />} />

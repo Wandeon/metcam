@@ -784,6 +784,166 @@ def download_recording_file(match_id: str, file_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/v1/system-metrics")
+def get_system_metrics():
+    """Get real-time system metrics: power mode, CPU frequencies, temperature, usage"""
+    api_requests.labels(endpoint='system-metrics', method='GET').inc()
+    try:
+        metrics = {}
+
+        # Power mode (read from nvpmodel status file)
+        try:
+            mode_id = 'N/A'
+            mode_name = 'Unknown'
+
+            # Read from nvpmodel status file
+            status_file = '/var/lib/nvpmodel/status'
+            if Path(status_file).exists():
+                with open(status_file, 'r') as f:
+                    for line in f:
+                        if line.startswith('pmode:'):
+                            mode_id = line.split(':')[1].strip().lstrip('0')  # Remove leading zeros
+                            # Map mode IDs to names for Orin Nano Super
+                            mode_names = {
+                                '0': '15W',
+                                '1': '25W',
+                                '2': 'MAXN_SUPER',
+                                '3': '7W'
+                            }
+                            mode_name = mode_names.get(mode_id, f'Mode {mode_id}')
+                            break
+
+            metrics['power_mode'] = {
+                'name': mode_name,
+                'id': mode_id,
+                'is_max': mode_id == '2'
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get power mode: {e}")
+            metrics['power_mode'] = {'name': 'Unknown', 'id': 'N/A', 'is_max': False}
+
+        # CPU frequencies
+        try:
+            cpu_freqs = []
+            for cpu in range(6):
+                freq_path = f'/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_cur_freq'
+                try:
+                    with open(freq_path, 'r') as f:
+                        freq_khz = int(f.read().strip())
+                        freq_ghz = freq_khz / 1000000.0
+                        cpu_freqs.append({
+                            'cpu': cpu,
+                            'freq_ghz': round(freq_ghz, 3),
+                            'type': 'performance' if cpu < 4 else 'efficiency'
+                        })
+                except:
+                    pass
+            metrics['cpu_frequencies'] = cpu_freqs
+            perf_cores = [c['freq_ghz'] for c in cpu_freqs if c['type'] == 'performance']
+            eff_cores = [c['freq_ghz'] for c in cpu_freqs if c['type'] == 'efficiency']
+            metrics['cpu_avg'] = {
+                'performance': round(sum(perf_cores) / len(perf_cores), 3) if perf_cores else 0,
+                'efficiency': round(sum(eff_cores) / len(eff_cores), 3) if eff_cores else 0
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get CPU frequencies: {e}")
+            metrics['cpu_frequencies'] = []
+            metrics['cpu_avg'] = {'performance': 0, 'efficiency': 0}
+
+        # Temperature
+        try:
+            temps = []
+            max_temp = 0
+            for zone_path in Path('/sys/class/thermal').glob('thermal_zone*/temp'):
+                try:
+                    with open(zone_path, 'r') as f:
+                        temp_millic = int(f.read().strip())
+                        temp_c = temp_millic / 1000.0
+                        temps.append(round(temp_c, 1))
+                        if temp_c > max_temp:
+                            max_temp = temp_c
+                except:
+                    pass
+            metrics['temperature'] = {
+                'max_c': round(max_temp, 1),
+                'zones': temps,
+                'warning': max_temp > 75,
+                'critical': max_temp > 85
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get temperature: {e}")
+            metrics['temperature'] = {'max_c': 0, 'zones': [], 'warning': False, 'critical': False}
+
+        # CPU usage
+        try:
+            result = subprocess.run(['top', '-bn', '1'], capture_output=True, text=True)
+            for line in result.stdout.split('\n'):
+                if 'Cpu(s)' in line or '%Cpu' in line:
+                    parts = line.split(',')
+                    for part in parts:
+                        if 'id' in part:
+                            idle = float(part.split()[0])
+                            used = 100 - idle
+                            metrics['cpu_usage'] = {'overall': round(used, 1)}
+                            break
+                    break
+            if 'cpu_usage' not in metrics:
+                metrics['cpu_usage'] = {'overall': 0}
+        except Exception as e:
+            logger.warning(f"Failed to get CPU usage: {e}")
+            metrics['cpu_usage'] = {'overall': 0}
+
+        # Memory usage
+        try:
+            with open('/proc/meminfo', 'r') as f:
+                lines = f.readlines()
+                mem_info = {}
+                for line in lines:
+                    parts = line.split(':')
+                    if len(parts) == 2:
+                        key = parts[0].strip()
+                        value = int(parts[1].strip().split()[0])
+                        mem_info[key] = value
+                total = mem_info.get('MemTotal', 0) / (1024**2)
+                available = mem_info.get('MemAvailable', 0) / (1024**2)
+                used = total - available
+                metrics['memory'] = {
+                    'total_gb': round(total, 2),
+                    'used_gb': round(used, 2),
+                    'percent': round((used / total) * 100, 1) if total > 0 else 0,
+                    'available_gb': round(available, 2)
+                }
+        except Exception as e:
+            logger.warning(f"Failed to get memory usage: {e}")
+            metrics['memory'] = {'total_gb': 0, 'used_gb': 0, 'percent': 0, 'available_gb': 0}
+
+        # Storage usage
+        try:
+            recordings_path = '/mnt/recordings'
+            if Path(recordings_path).exists():
+                stat = os.statvfs(recordings_path)
+                total = (stat.f_blocks * stat.f_frsize) / (1024**3)
+                free = (stat.f_bavail * stat.f_frsize) / (1024**3)
+                used = total - free
+                metrics['storage'] = {
+                    'total_gb': round(total, 2),
+                    'used_gb': round(used, 2),
+                    'free_gb': round(free, 2),
+                    'percent': round((used / total) * 100, 1) if total > 0 else 0
+                }
+            else:
+                metrics['storage'] = {'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'percent': 0}
+        except Exception as e:
+            logger.warning(f"Failed to get storage usage: {e}")
+            metrics['storage'] = {'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'percent': 0}
+
+        return metrics
+
+    except Exception as e:
+        logger.error(f"Failed to fetch system metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/v1/logs/{log_type}")
 def get_logs(log_type: str, lines: int = 100):
     """Get system logs - supports: health, alerts, watchdog"""
