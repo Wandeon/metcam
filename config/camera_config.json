@@ -9,8 +9,8 @@
         "_example": "For 3840x2160 sensor: left=480 removes 480px from left, output width = 3840-480-480 = 2880",
         "left": 480,
         "right": 480,
-        "top": 272,
-        "bottom": 272
+        "top": 0,
+        "bottom": 408
       },
       "exposure_compensation": 0.0,
       "_exposure_comment": "Exposure compensation: -2.0 to +2.0, where 0 is neutral. Positive = brighter, negative = darker. Synchronized across cameras.",
@@ -27,8 +27,8 @@
         "_example": "For 3840x2160 sensor: left=480 removes 480px from left, output width = 3840-480-480 = 2880",
         "left": 480,
         "right": 480,
-        "top": 272,
-        "bottom": 272
+        "top": 0,
+        "bottom": 408
       },
       "exposure_compensation": 0.0,
       "_exposure_comment": "Exposure compensation: -2.0 to +2.0, where 0 is neutral. Positive = brighter, negative = darker. Synchronized across cameras.",
@@ -49,8 +49,8 @@
           "crop": {
             "left": 480,
             "right": 480,
-            "top": 272,
-            "bottom": 272
+            "top": 0,
+            "bottom": 408
           },
           "correction_type": "barrel",
           "correction_params": {
@@ -63,8 +63,8 @@
           "crop": {
             "left": 480,
             "right": 480,
-            "top": 272,
-            "bottom": 272
+            "top": 0,
+            "bottom": 408
           },
           "correction_type": "barrel",
           "correction_params": {
