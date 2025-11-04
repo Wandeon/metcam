@@ -90,6 +90,13 @@ const panoramaApi = {
     if (!response.ok) throw new Error('Failed to complete calibration');
   },
 
+  async resetCalibration(): Promise<void> {
+    const response = await fetch('/api/v1/panorama/calibration/reset', {
+      method: 'POST',
+    });
+    if (!response.ok) throw new Error('Failed to reset calibration');
+  },
+
   async clearCalibration(): Promise<void> {
     const response = await fetch('/api/v1/panorama/calibration', {
       method: 'DELETE',
@@ -320,6 +327,24 @@ export const Panorama: React.FC = () => {
       await fetchStatus();
     } catch (err) {
       showError('Failed to complete calibration');
+      console.error(err);
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const handleResetCalibration = async () => {
+    if (!confirm('Are you sure you want to reset calibration? All captured frames will be lost.')) {
+      return;
+    }
+
+    setActionInProgress(true);
+    try {
+      await panoramaApi.resetCalibration();
+      showSuccess('Calibration reset successfully');
+      await fetchCalibrationStatus();
+    } catch (err) {
+      showError('Failed to reset calibration');
       console.error(err);
     } finally {
       setActionInProgress(false);
@@ -618,20 +643,29 @@ export const Panorama: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex gap-3">
+            <div className="space-y-3">
+              <div className="flex gap-3">
+                <button
+                  onClick={handleCaptureFrame}
+                  disabled={actionInProgress}
+                  className="flex-1 bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
+                >
+                  Capture Frame
+                </button>
+                <button
+                  onClick={handleCompleteCalibration}
+                  disabled={actionInProgress || capturedFrames < 10}
+                  className="flex-1 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
+                >
+                  Complete Calibration
+                </button>
+              </div>
               <button
-                onClick={handleCaptureFrame}
+                onClick={handleResetCalibration}
                 disabled={actionInProgress}
-                className="flex-1 bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
+                className="w-full bg-red-500 hover:bg-red-600 disabled:bg-gray-400 text-white font-semibold py-2 rounded-lg transition-colors"
               >
-                Capture Frame
-              </button>
-              <button
-                onClick={handleCompleteCalibration}
-                disabled={actionInProgress || capturedFrames < 10}
-                className="flex-1 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
-              >
-                Complete Calibration
+                Reset Calibration
               </button>
             </div>
           </div>
