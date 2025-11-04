@@ -85,6 +85,7 @@ export interface RecordingRequest {
   fps?: number;  // Ignored by API v3
   bitrate_kbps?: number;  // Ignored by API v3
   mode?: 'normal' | 'no_crop' | 'optimized';  // Ignored by API v3
+  process_after_recording?: boolean;  // Enable post-processing when stopped
 }
 
 export interface RecordingStartResponseV3 {
@@ -207,6 +208,7 @@ export const apiService = {
     const v3Request = {
       match_id: request.match_id,
       force: request.force || false,
+      process_after_recording: request.process_after_recording || false,
     };
 
     const response = await api.post<RecordingStartResponseV3>('/recording', v3Request);

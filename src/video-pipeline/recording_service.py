@@ -14,7 +14,7 @@ from datetime import datetime
 from threading import Lock
 
 from gstreamer_manager import GStreamerManager
-from pipeline_builders import build_recording_pipeline
+from pipeline_builders import build_recording_pipeline, load_camera_config
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class RecordingService:
         # Recording state
         self.current_match_id: Optional[str] = None
         self.recording_start_time: Optional[float] = None
+        self.process_after_recording: bool = False  # Post-processing flag
         self.state_lock = Lock()
         
         # Recording protection
@@ -58,16 +59,18 @@ class RecordingService:
                 if state.get('recording', False):
                     match_id = state.get('match_id')
                     start_time = state.get('start_time')
-                    
-                    logger.info(f"Restored recording state: match_id={match_id}, start_time={start_time}")
-                    
+                    process_after = state.get('process_after_recording', False)
+
+                    logger.info(f"Restored recording state: match_id={match_id}, start_time={start_time}, process_after={process_after}")
+
                     # Check if pipelines still exist
                     cam0_exists = self.gst_manager.get_pipeline_status('recording_cam0') is not None
                     cam1_exists = self.gst_manager.get_pipeline_status('recording_cam1') is not None
-                    
+
                     if cam0_exists and cam1_exists:
                         self.current_match_id = match_id
                         self.recording_start_time = start_time
+                        self.process_after_recording = process_after
                         logger.info("Recording pipelines still active after restart")
                     else:
                         logger.warning("Recording state file exists but pipelines not found, clearing state")
@@ -84,12 +87,13 @@ class RecordingService:
                 'recording': self.current_match_id is not None,
                 'match_id': self.current_match_id,
                 'start_time': self.recording_start_time,
+                'process_after_recording': self.process_after_recording,
                 'timestamp': time.time()
             }
-            
+
             with open(self.state_file, 'w') as f:
                 json.dump(state, f, indent=2)
-                
+
         except Exception as e:
             logger.error(f"Failed to save recording state: {e}")
     
@@ -138,14 +142,15 @@ class RecordingService:
                 'protected': duration < self.protection_seconds
             }
     
-    def start_recording(self, match_id: str, force: bool = False) -> Dict:
+    def start_recording(self, match_id: str, force: bool = False, process_after_recording: bool = False) -> Dict:
         """
         Start dual-camera recording
-        
+
         Args:
             match_id: Unique match identifier
             force: Force start even if already recording
-            
+            process_after_recording: Enable post-processing (merge + re-encode) when stopped
+
         Returns:
             Dict with status and message
         """
@@ -178,9 +183,18 @@ class RecordingService:
                     from datetime import datetime
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     output_pattern = str(match_dir / f"cam{cam_id}_{timestamp}_%02d.mp4")
-                    
-                    # Build pipeline
-                    pipeline_str = build_recording_pipeline(cam_id, output_pattern)
+
+                    # Get quality preset from config (default to 'high')
+                    try:
+                        config = load_camera_config()
+                        quality_preset = config.get('recording_quality', 'high')
+                    except Exception as e:
+                        logger.warning(f"Failed to load quality preset from config: {e}, using 'high'")
+                        quality_preset = 'high'
+
+                    # Build pipeline with quality preset
+                    pipeline_str = build_recording_pipeline(cam_id, output_pattern, quality_preset=quality_preset)
+                    logger.info(f"Building recording pipeline for cam{cam_id} with quality preset: {quality_preset}")
                     
                     # Create pipeline
                     pipeline_name = f'recording_cam{cam_id}'
@@ -231,7 +245,8 @@ class RecordingService:
             # Update state
             self.current_match_id = match_id
             self.recording_start_time = time.time()
-            
+            self.process_after_recording = process_after_recording
+
             # Persist state
             self._save_state()
             
@@ -279,11 +294,26 @@ class RecordingService:
             except Exception as e:
                 logger.error(f"Failed to stop camera {cam_id}: {e}")
         
+        # Trigger post-processing if enabled
+        should_process = self.process_after_recording
+        match_id_for_processing = self.current_match_id
+
         # Clear state
         self.current_match_id = None
         self.recording_start_time = None
+        self.process_after_recording = False
         self._clear_state()
-        
+
+        # Start post-processing in background (after state is cleared)
+        if should_process:
+            logger.info(f"Triggering post-processing for {match_id_for_processing}")
+            try:
+                from post_processing_service import get_post_processing_service
+                post_service = get_post_processing_service()
+                post_service.process_recording_async(match_id_for_processing)
+            except Exception as e:
+                logger.error(f"Failed to start post-processing: {e}")
+
         return True
     
     def stop_recording(self, force: bool = False) -> Dict:

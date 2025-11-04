@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, Film, RefreshCw, Trash2, Package } from 'lucide-react';
+import { Download, Film, RefreshCw, Trash2, Package, Loader2, CheckCircle } from 'lucide-react';
 
 interface RecordingEntry {
   file: string;
@@ -126,6 +126,7 @@ export const Matches: React.FC = () => {
   const [diskStatus, setDiskStatus] = useState<{ freeGb: number; percentUsed: number } | null>(null);
   const [sortOption, setSortOption] = useState<'date_desc' | 'date_asc' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'>('date_desc');
   const [debugInfo, setDebugInfo] = useState<string>('');
+  const [processingStatus, setProcessingStatus] = useState<Record<string, { processing: boolean; completed: boolean }>>({});
 
   const sortedMatches = useMemo(() => {
     const matchesCopy = [...matches];
@@ -177,6 +178,28 @@ export const Matches: React.FC = () => {
   const singleFiles = currentMatch?.files.filter(
     entry => !(entry.type === 'segmented' || (entry.segment_count && entry.segment_count > 1))
   ) ?? [];
+
+  // Separate archive files from original single files
+  const archiveFiles = singleFiles.filter(entry => entry.file.includes('_archive.mp4'));
+  const originalSingleFiles = singleFiles.filter(entry => !entry.file.includes('_archive.mp4'));
+
+  const currentMatchProcessingStatus = downloadModalMatchId ? processingStatus[downloadModalMatchId] : null;
+
+  const fetchProcessingStatus = async (matchId: string) => {
+    try {
+      const response = await fetch(`/api/v1/recordings/${matchId}/processing-status`);
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          processing: data.processing || false,
+          completed: data.completed || false,
+        };
+      }
+    } catch (error) {
+      console.error(`Failed to fetch processing status for ${matchId}:`, error);
+    }
+    return { processing: false, completed: false };
+  };
 
   const loadMatches = async () => {
     try {
@@ -342,6 +365,17 @@ export const Matches: React.FC = () => {
       const filteredMatches = matchList.filter(match => match.files.length > 0);
       setMatches(filteredMatches);
       setDebugInfo(`Loaded ${filteredMatches.length} matches`);
+
+      // Fetch processing status for all matches in parallel
+      const statusPromises = filteredMatches.map(match =>
+        fetchProcessingStatus(match.id).then(status => ({ matchId: match.id, status }))
+      );
+      const statuses = await Promise.all(statusPromises);
+      const statusMap: Record<string, { processing: boolean; completed: boolean }> = {};
+      statuses.forEach(({ matchId, status }) => {
+        statusMap[matchId] = status;
+      });
+      setProcessingStatus(statusMap);
     } catch (error) {
       console.error('Failed to load matches:', error);
       setDebugInfo(`Error: ${error}`);
@@ -621,6 +655,26 @@ export const Matches: React.FC = () => {
               <strong>{downloadModalMatchId}</strong>
             </p>
 
+            {currentMatchProcessingStatus?.processing && (
+              <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center">
+                <Loader2 className="w-5 h-5 mr-2 text-blue-600 animate-spin" />
+                <div>
+                  <p className="font-semibold text-blue-900">Processing in progress</p>
+                  <p className="text-sm text-blue-700">Merging segments and re-encoding to archive quality...</p>
+                </div>
+              </div>
+            )}
+
+            {currentMatchProcessingStatus?.completed && archiveFiles.length > 0 && (
+              <div className="mb-4 bg-green-50 border border-green-200 rounded-lg px-4 py-3 flex items-center">
+                <CheckCircle className="w-5 h-5 mr-2 text-green-600" />
+                <div>
+                  <p className="font-semibold text-green-900">Processing complete</p>
+                  <p className="text-sm text-green-700">Archive files are ready for download</p>
+                </div>
+              </div>
+            )}
+
             {hasSegmentedFiles && (
               <div className="mb-6">
                 <h4 className="text-lg font-semibold text-gray-800 mb-2">Segmented Cameras</h4>
@@ -737,10 +791,43 @@ export const Matches: React.FC = () => {
               </div>
             )}
 
-            {singleFiles.length > 0 && (
+            {archiveFiles.length > 0 && (
+              <div className="mb-6">
+                <h4 className="text-lg font-semibold text-gray-800 mb-2">Processed Archive Files</h4>
+                <p className="text-sm text-gray-600 mb-3">
+                  Optimized quality (1920x1080) - merged and re-encoded from all segments
+                </p>
+                <div className="flex flex-col gap-2">
+                  {archiveFiles.map(entry => {
+                    const createdLabel = formatTimestamp(entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined));
+                    const directDownloadUrl = entry.download_path
+                      ?? `/api/v1/recordings/${encodeURIComponent(downloadModalMatchId)}/files/${encodeURIComponent(entry.file)}`;
+                    return (
+                      <a
+                        key={entry.file}
+                        href={directDownloadUrl}
+                        download
+                        className="flex items-center justify-between px-4 py-3 bg-green-600 text-white rounded hover:bg-green-700 text-sm touch-manipulation"
+                      >
+                        <span className="flex flex-col text-left">
+                          <span className="flex items-center">
+                            <Download className="w-4 h-4 mr-2" />
+                            {formatLabel(entry.file)}
+                          </span>
+                          <span className="text-xs text-green-100 mt-1">{createdLabel}</span>
+                        </span>
+                        <span className="text-xs opacity-75">{formatSize(entry.size_mb)}</span>
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {originalSingleFiles.length > 0 && (
               <div className="flex flex-col gap-2">
-                <h4 className="text-lg font-semibold text-gray-800">Direct Downloads</h4>
-                {singleFiles.map(entry => {
+                <h4 className="text-lg font-semibold text-gray-800">Other Downloads</h4>
+                {originalSingleFiles.map(entry => {
                   const createdLabel = formatTimestamp(entry.createdAtMs ?? (entry.created_at ? entry.created_at * 1000 : undefined));
                   const directDownloadUrl = entry.download_path
                     ?? `/api/v1/recordings/${encodeURIComponent(downloadModalMatchId)}/files/${encodeURIComponent(entry.file)}`;
@@ -778,11 +865,27 @@ export const Matches: React.FC = () => {
       )}
 
       <div className="grid gap-4">
-        {sortedMatches.map((match) => (
+        {sortedMatches.map((match) => {
+          const matchStatus = processingStatus[match.id];
+          return (
           <div key={match.id} className="bg-white rounded-lg shadow p-4 md:p-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-              <div>
-                <h3 className="text-lg font-semibold">{match.id}</h3>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-semibold">{match.id}</h3>
+                  {matchStatus?.processing && (
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      Processing
+                    </span>
+                  )}
+                  {matchStatus?.completed && (
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      <CheckCircle className="w-3 h-3 mr-1" />
+                      Archive ready
+                    </span>
+                  )}
+                </div>
                 <p className="text-gray-600 text-sm">
                   {formatTimestamp(match.date)}
                 </p>
@@ -819,7 +922,8 @@ export const Matches: React.FC = () => {
               </div>
             </div>
           </div>
-        ))}
+        );
+        })}
 
         {matches.length === 0 && (
           <div className="text-center py-12 text-gray-500">

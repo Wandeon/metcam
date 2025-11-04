@@ -83,6 +83,15 @@ except Exception as e:
 recording_service = get_recording_service()
 preview_service = get_preview_service()
 
+# Import post-processing service
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent / "video-pipeline"))
+    from post_processing_service import get_post_processing_service
+    post_processing_service = get_post_processing_service()
+except Exception as e:
+    logger.error(f"Failed to initialize post-processing service: {e}")
+    post_processing_service = None
+
 # Ensure all pipelines are stopped on startup
 try:
     logger.info("Ensuring all pipelines are stopped on startup...")
@@ -104,6 +113,7 @@ api_requests = Counter('footballvision_api_requests', 'API request count', ['end
 class RecordingRequest(BaseModel):
     match_id: Optional[str] = None
     force: Optional[bool] = False
+    process_after_recording: Optional[bool] = False  # Enable post-processing (merge + re-encode)
 
 class RecordingStopRequest(BaseModel):
     force: Optional[bool] = False
@@ -245,11 +255,12 @@ def start_recording(request: RecordingRequest):
             except Exception as preview_err:
                 logger.error(f"Error stopping preview: {preview_err}, continuing anyway")
         
-        logger.info(f"Recording start requested: match_id={request.match_id}, force={request.force}")
-        
+        logger.info(f"Recording start requested: match_id={request.match_id}, force={request.force}, process_after={request.process_after_recording}")
+
         result = recording_service.start_recording(
             match_id=request.match_id,
-            force=request.force
+            force=request.force,
+            process_after_recording=request.process_after_recording
         )
         
         if result['success']:
@@ -694,6 +705,48 @@ def delete_recording(match_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/v1/recordings/{match_id}/processing-status")
+def get_processing_status(match_id: str):
+    """Get post-processing status for a recording"""
+    api_requests.labels(endpoint='processing_status', method='GET').inc()
+    try:
+        if post_processing_service is None:
+            return {"processing": False, "message": "Post-processing service not available"}
+
+        status = post_processing_service.get_status(match_id)
+
+        if status is None:
+            # Check if archive files exist (processing completed)
+            match_dir = Path(f"/mnt/recordings/{match_id}")
+            cam0_archive = match_dir / "cam0_archive.mp4"
+            cam1_archive = match_dir / "cam1_archive.mp4"
+
+            if cam0_archive.exists() or cam1_archive.exists():
+                return {
+                    "processing": False,
+                    "completed": True,
+                    "message": "Processing complete",
+                    "archives": {
+                        "cam0": cam0_archive.exists(),
+                        "cam1": cam1_archive.exists()
+                    }
+                }
+            else:
+                return {"processing": False, "completed": False, "message": "Not processed"}
+
+        return {
+            "processing": status['status'] == 'processing',
+            "completed": status['status'] in ['complete', 'done'],
+            "status": status['status'],
+            "start_time": status.get('start_time').isoformat() if status.get('start_time') else None,
+            "duration_seconds": status.get('duration_seconds')
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get processing status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/v1/recordings/{match_id}/download")
 def download_recording(match_id: str):
     """Download entire recording as a zip file"""
@@ -876,12 +929,16 @@ def get_system_metrics():
 
         # CPU usage
         try:
-            result = subprocess.run(['top', '-bn', '1'], capture_output=True, text=True)
+            # Copy environment and force C locale for consistent number format
+            env = os.environ.copy()
+            env['LC_NUMERIC'] = 'C'
+            result = subprocess.run(['top', '-bn', '1'], capture_output=True, text=True, env=env)
             for line in result.stdout.split('\n'):
                 if 'Cpu(s)' in line or '%Cpu' in line:
                     parts = line.split(',')
                     for part in parts:
-                        if 'id' in part:
+                        if ' id' in part:  # Match ' id' specifically (idle), not 'hi' or 'si'
+                            # With LC_NUMERIC=C, we get period decimal separator
                             idle = float(part.split()[0])
                             used = 100 - idle
                             metrics['cpu_usage'] = {'overall': round(used, 1)}

@@ -197,12 +197,12 @@ export function Health() {
               <div>
                 <div className="text-sm text-gray-600 mb-1">Performance Cores (0-3)</div>
                 <div className="text-2xl font-bold text-gray-900">{metrics.cpu_avg.performance} GHz</div>
-                <div className="text-xs text-gray-500">Target: 1.728 GHz</div>
+                <div className="text-xs text-gray-500">Max: 1.728 GHz</div>
               </div>
               <div>
                 <div className="text-sm text-gray-600 mb-1">Efficiency Cores (4-5)</div>
                 <div className="text-2xl font-bold text-gray-900">{metrics.cpu_avg.efficiency} GHz</div>
-                <div className="text-xs text-gray-500">Target: 0.729 GHz</div>
+                <div className="text-xs text-gray-500">Max: 0.730 GHz</div>
               </div>
             </div>
           </MetricCard>
@@ -298,7 +298,7 @@ export function Health() {
           <div className="text-sm text-blue-900">
             <p className="font-medium mb-2">About Jetson Orin Nano Super</p>
             <ul className="space-y-1 text-blue-800">
-              <li><strong>6 Cores:</strong> 4 performance cores (1.728 GHz) + 2 efficiency cores (729 MHz)</li>
+              <li><strong>6 Cores:</strong> 4 performance cores (max 1.728 GHz) + 2 efficiency cores (max 0.730 GHz)</li>
               <li><strong>Power Mode 2 (MAXN_SUPER)</strong> required for reliable 30fps dual-camera recording</li>
               <li><strong>Each camera uses ~2.01 CPU cores</strong> during recording</li>
               <li><strong>System auto-enforces</strong> Mode 2 every 5 minutes via health monitor</li>

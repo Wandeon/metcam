@@ -7,6 +7,7 @@ export const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [matchId, setMatchId] = useState('');
+  const [processAfterRecording, setProcessAfterRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -60,6 +61,7 @@ export const Dashboard: React.FC = () => {
         resolution: '1920x1080',
         fps: 30,
         bitrate_kbps: 45000,
+        process_after_recording: processAfterRecording,
       });
       await fetchStatus();
       setMatchId('');
@@ -230,6 +232,22 @@ export const Dashboard: React.FC = () => {
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
                 placeholder="e.g., match_20251003_001"
               />
+            </div>
+
+            <div className="flex items-center space-x-3 bg-blue-50 border border-blue-200 px-4 py-3 rounded-lg">
+              <input
+                type="checkbox"
+                id="processAfterRecording"
+                checked={processAfterRecording}
+                onChange={(e) => setProcessAfterRecording(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+              />
+              <label htmlFor="processAfterRecording" className="text-sm text-gray-700">
+                <span className="font-semibold">Process after recording</span>
+                <span className="text-gray-600 block text-xs mt-0.5">
+                  Merge segments and re-encode to archive quality (1920x1080, ~50% smaller file size)
+                </span>
+              </label>
             </div>
 
             <button

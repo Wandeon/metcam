@@ -1,6 +1,8 @@
 {
   "version": "1.0",
   "_comment": "Camera configuration for FootballVision Pro - See src/video-pipeline/README.md for details",
+  "recording_quality": "fast",
+  "_quality_comment": "Recording quality preset: 'high' (25Mbps, veryfast, bframes), 'balanced' (22Mbps, fast), or 'fast' (20Mbps, ultrafast). Default: high",
   "cameras": {
     "0": {
       "rotation": 0.0,
