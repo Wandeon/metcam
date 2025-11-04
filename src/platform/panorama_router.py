@@ -163,9 +163,17 @@ async def get_calibration_status():
     try:
         # Get calibration info from status
         status = panorama_service.get_status()
+        calibration_info = status.get('calibration_info', {})
+
+        # Get calibration progress to include is_calibrating and frames_captured
+        progress = panorama_service.get_calibration_progress()
+
         return {
             'calibrated': status.get('calibrated', False),
-            'calibration_info': status.get('calibration_info', {})
+            'is_calibrating': progress.get('is_calibrating', False),
+            'frames_captured': progress.get('frames_captured', 0),
+            'quality_score': calibration_info.get('quality_score'),
+            'calibration_date': calibration_info.get('calibration_date')
         }
     except Exception as e:
         logger.error(f"Error getting calibration status: {e}")
@@ -389,12 +397,13 @@ async def get_processing_status(match_id: str):
     """
     try:
         # TODO: Implement actual processing status tracking
-        # For now, return stub response
+        # For now, return stub response with frontend-compatible fields
         return {
             'processing': False,
             'progress': 0,
-            'estimated_remaining_minutes': 0,
-            'current_fps': 0,
+            'eta_seconds': None,
+            'completed': False,
+            'error': None,
             'message': 'Processing status tracking not yet implemented'
         }
     except Exception as e:

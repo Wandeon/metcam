@@ -500,18 +500,53 @@ class PanoramaService:
                 except Exception as e:
                     logger.error(f"Failed to get config: {e}")
 
+            # Flatten performance metrics for frontend compatibility
+            performance = {
+                'current_fps': self.preview_fps,
+                'frames_stitched': self.frames_stitched,
+                'avg_sync_drift_ms': sync_stats.get('avg_drift_ms', 0.0),
+                'dropped_frames': sync_stats.get('dropped_frames', 0),
+                'sync_stats': sync_stats,
+                'stitch_stats': stitch_stats
+            }
+
             return {
                 'preview_active': self.preview_active,
                 'uptime_seconds': uptime,
                 'calibrated': self._is_calibrated(),
                 'calibration_info': calibration_info,
-                'performance': {
-                    'current_fps': self.preview_fps,
-                    'frames_stitched': self.frames_stitched,
-                    'sync_stats': sync_stats,
-                    'stitch_stats': stitch_stats
-                },
+                'performance': performance,
                 'config': config
+            }
+
+    def get_calibration_progress(self) -> Dict:
+        """
+        Get calibration progress information
+
+        Returns:
+            Dictionary with calibration progress details
+        """
+        try:
+            if self.calibration_service:
+                return self.calibration_service.get_calibration_progress()
+            else:
+                return {
+                    'is_calibrating': False,
+                    'frames_captured': 0,
+                    'frames_needed': 10,
+                    'frames_target': 15,
+                    'ready_to_calculate': False,
+                    'progress_percent': 0
+                }
+        except Exception as e:
+            logger.error(f"Error getting calibration progress: {e}")
+            return {
+                'is_calibrating': False,
+                'frames_captured': 0,
+                'frames_needed': 10,
+                'frames_target': 15,
+                'ready_to_calculate': False,
+                'progress_percent': 0
             }
 
     def process_recording(

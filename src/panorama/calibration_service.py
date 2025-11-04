@@ -30,8 +30,40 @@ class CalibrationService:
         self.calibration_frames = []
         self.min_frames = 10
         self.target_frames = 15
+        self.is_calibrating = False
 
         logger.info("CalibrationService initialized")
+
+    def start(self) -> bool:
+        """
+        Start calibration mode
+
+        Returns:
+            True if calibration started successfully
+        """
+        try:
+            # Clear any existing calibration data
+            self.calibration_frames = []
+            self.is_calibrating = True
+
+            logger.info("Calibration mode started")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error starting calibration: {e}", exc_info=True)
+            self.is_calibrating = False
+            return False
+
+    def capture_frame_pair(
+        self,
+        frame_cam0: np.ndarray,
+        frame_cam1: np.ndarray,
+        timestamp: float
+    ) -> bool:
+        """
+        Alias for capture_calibration_frame for backward compatibility
+        """
+        return self.capture_calibration_frame(frame_cam0, frame_cam1, timestamp)
 
     def capture_calibration_frame(
         self,
@@ -122,6 +154,7 @@ class CalibrationService:
         frames_captured = len(self.calibration_frames)
 
         return {
+            'is_calibrating': self.is_calibrating,
             'frames_captured': frames_captured,
             'frames_needed': self.min_frames,
             'frames_target': self.target_frames,
@@ -236,10 +269,14 @@ class CalibrationService:
             # Save calibration data
             self.config_manager.save_calibration(metadata)
 
+            # Exit calibration mode after successful calculation
+            self.is_calibrating = False
+
             return True, H, metadata
 
         except Exception as e:
             logger.error(f"Error calculating homography: {e}", exc_info=True)
+            self.is_calibrating = False
             return False, None, {'error': str(e)}
 
     def _extract_features_vpi(self, image: np.ndarray) -> np.ndarray:
@@ -503,6 +540,7 @@ class CalibrationService:
             return float('inf')
 
     def reset(self) -> None:
-        """Clear captured calibration frames"""
+        """Clear captured calibration frames and exit calibration mode"""
         self.calibration_frames = []
-        logger.info("Calibration frames cleared")
+        self.is_calibrating = False
+        logger.info("Calibration frames cleared and calibration mode stopped")
