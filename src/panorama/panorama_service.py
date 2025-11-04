@@ -76,14 +76,14 @@ class PanoramaService:
 
         # Lazy imports to avoid circular dependencies
         try:
-            from .config_manager import PanoramaConfigManager
+            from config_manager import PanoramaConfigManager
             self.config_manager = PanoramaConfigManager()
         except ImportError as e:
             logger.warning(f"Config manager not available: {e}")
             self.config_manager = None
 
         try:
-            from .frame_synchronizer import FrameSynchronizer
+            from frame_synchronizer import FrameSynchronizer
             self.synchronizer = FrameSynchronizer()
         except ImportError as e:
             logger.warning(f"Frame synchronizer not available: {e}")
@@ -208,7 +208,7 @@ class PanoramaService:
                 return False
 
             # Import and initialize stitcher
-            from .vpi_stitcher import VPIStitcher
+            from vpi_stitcher import VPIStitcher
 
             # Get homography matrix and output dimensions
             homography = self.config_manager.get_homography()
@@ -635,7 +635,7 @@ class PanoramaService:
             # Lazy-load calibration service
             if self.calibration_service is None:
                 try:
-                    from .calibration_service import CalibrationService
+                    from calibration_service import CalibrationService
                     self.calibration_service = CalibrationService(self.config_manager)
                 except ImportError as e:
                     logger.error(f"Calibration service not available: {e}")
@@ -658,10 +658,19 @@ class PanoramaService:
                     'message': 'Cannot start calibration: recording is active'
                 }
 
-            # Reset calibration service
-            result = self.calibration_service.start()
+            # Start calibration service
+            success = self.calibration_service.start()
 
-            return result
+            if success:
+                return {
+                    'success': True,
+                    'message': 'Calibration started successfully'
+                }
+            else:
+                return {
+                    'success': False,
+                    'message': 'Failed to start calibration'
+                }
 
         except Exception as e:
             logger.error(f"Failed to start calibration: {e}")
