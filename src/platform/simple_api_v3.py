@@ -784,6 +784,42 @@ def download_recording_file(match_id: str, file_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/v1/logs/{log_type}")
+def get_logs(log_type: str, lines: int = 100):
+    """Get system logs - supports: health, alerts, watchdog"""
+    api_requests.labels(endpoint='logs', method='GET').inc()
+    try:
+        log_files = {
+            'health': '/var/log/footballvision/system/health_monitor.log',
+            'alerts': '/var/log/footballvision/system/alerts.log',
+            'watchdog': '/var/log/footballvision/system/watchdog.log'
+        }
+
+        if log_type not in log_files:
+            raise HTTPException(status_code=400, detail=f"Unknown log type. Available: {', '.join(log_files.keys())}")
+
+        log_path = Path(log_files[log_type])
+        if not log_path.exists():
+            return {"log_type": log_type, "lines": [], "message": "Log file does not exist yet"}
+
+        # Read last N lines
+        with open(log_path, 'r') as f:
+            all_lines = f.readlines()
+            last_lines = all_lines[-lines:] if lines < len(all_lines) else all_lines
+
+        return {
+            "log_type": log_type,
+            "lines": [line.strip() for line in last_lines],
+            "total_lines": len(last_lines)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Mount HLS directory
 if Path("/tmp/hls").exists():
     app.mount("/hls", StaticFiles(directory="/tmp/hls"), name="hls")

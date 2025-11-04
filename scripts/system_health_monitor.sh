@@ -7,7 +7,7 @@ ALERT_FILE="/var/log/footballvision/system/alerts.log"
 RECORDINGS_DIR="/mnt/recordings"
 MIN_FREE_GB=20
 MAX_TEMP_C=75
-POWER_MODE_REQUIRED=1  # 25W mode
+POWER_MODE_REQUIRED=2  # MAXN_SUPER mode for maximum performance
 
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -71,10 +71,12 @@ check_temperature() {
 
 # 3. Check Power Mode
 check_power_mode() {
-    local current_mode=$(nvpmodel -q | grep "NV Power Mode" | awk '{print $4}')
+    # Get the numeric mode ID (second line of nvpmodel -q output)
+    local current_mode=$(nvpmodel -q | tail -1)
+    local current_mode_name=$(nvpmodel -q | grep "NV Power Mode" | awk '{print $4}')
 
     if [ "$current_mode" != "$POWER_MODE_REQUIRED" ]; then
-        alert "Wrong power mode: $current_mode (should be $POWER_MODE_REQUIRED)"
+        alert "Wrong power mode: mode $current_mode ($current_mode_name) - expected mode $POWER_MODE_REQUIRED"
         # Auto-fix
         sudo nvpmodel -m "$POWER_MODE_REQUIRED"
         log_message "Power mode corrected to $POWER_MODE_REQUIRED"
@@ -116,12 +118,25 @@ check_recording_health() {
 
 # 6. Check CPU Frequency (throttling detection)
 check_cpu_frequency() {
-    local min_freq=2000000  # 2.0 GHz expected for recording
-    local actual_freq=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)
+    local min_freq=1728000  # 1.728 GHz is max for Jetson Orin Nano Super
+    # Check only performance cores (CPUs 0-3), CPUs 4-5 are efficiency cores
+    local total_freq=0
+    local count=0
 
-    if [ "$actual_freq" -lt "$min_freq" ]; then
-        local freq_ghz=$(echo "scale=1; $actual_freq / 1000000" | bc)
-        alert "CPU throttling detected: ${freq_ghz}GHz (expected 2.0GHz)"
+    for cpu in 0 1 2 3; do
+        local freq=$(cat /sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_cur_freq 2>/dev/null)
+        if [ -n "$freq" ]; then
+            total_freq=$((total_freq + freq))
+            count=$((count + 1))
+        fi
+    done
+
+    if [ "$count" -gt 0 ]; then
+        local avg_freq=$((total_freq / count))
+        if [ "$avg_freq" -lt "$min_freq" ]; then
+            local freq_ghz=$(echo "scale=2; $avg_freq / 1000000" | bc)
+            alert "Performance CPU throttling detected: ${freq_ghz}GHz avg (expected 1.728GHz)"
+        fi
     fi
 }
 

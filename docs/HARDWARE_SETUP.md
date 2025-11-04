@@ -20,12 +20,13 @@ Complete guide for setting up the hardware components for FootballVision Pro v3.
 
 ### Main Computing Unit
 
-**NVIDIA Jetson Orin Nano**
-- Model: Jetson Orin Nano 8GB (recommended) or 4GB
+**NVIDIA Jetson Orin Nano Super**
+- Model: Jetson Orin Nano Super 8GB (recommended)
 - JetPack: Version 6.1 or higher
 - Operating System: Ubuntu 22.04 (included with JetPack)
-- CPU: 6-core Arm Cortex-A78AE v8.2 64-bit
+- CPU: 6-core Arm Cortex-A78AE v8.2 64-bit (4 performance cores @ 1.728 GHz + 2 efficiency cores @ 729 MHz)
 - GPU: 1024-core NVIDIA Ampere architecture GPU
+- **Note:** System is optimized for Jetson Orin Nano Super. Performance cores provide maximum encoding performance.
 
 ### Cameras
 
@@ -203,26 +204,36 @@ dpkg -l | grep nvidia-jetpack
 
 ### Performance Mode
 
-For optimal recording performance:
+For optimal recording performance on Jetson Orin Nano Super:
 
 ```bash
 # View available power modes
 sudo nvpmodel -q
 
-# Set to maximum performance (mode 0)
-sudo nvpmodel -m 0
+# Set to MAXN_SUPER mode (mode 2 on Orin Nano Super)
+sudo nvpmodel -m 2
 
 # Lock clocks to maximum
 sudo jetson_clocks
 
 # Verify current mode
 sudo nvpmodel -q
+# Should show: NV Power Mode: MAXN_SUPER
+#              2
 ```
 
-**Performance Modes:**
-- Mode 0: MAXN (Maximum Performance) - **Recommended for recording**
-- Mode 1: 15W
-- Mode 2: 10W (Power saving)
+**Performance Modes (Jetson Orin Nano Super):**
+- Mode 0: 15W (1497.6 MHz max CPU)
+- Mode 1: 25W (1344 MHz max CPU)
+- Mode 2: MAXN_SUPER (1.728 GHz max CPU, unlimited power) - **REQUIRED for recording**
+- Mode 3: 7W (960 MHz, 4 cores only)
+
+**CRITICAL:** Mode 2 (MAXN_SUPER) is required for reliable 30fps dual-camera recording. The system health monitor (`/home/mislav/footballvision-pro/scripts/system_health_monitor.sh`) automatically enforces this setting every 5 minutes.
+
+**Why Mode 2:**
+- Maximizes performance cores to 1.728 GHz
+- Provides ~2.01 CPU cores per camera for encoding
+- No power limits, preventing thermal throttling under load
 
 ### Thermal Management
 

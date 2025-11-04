@@ -512,6 +512,84 @@ curl http://localhost/hls/cam1_preview.m3u8
 
 ## Performance Issues
 
+### Issue: False Power Mode or CPU Throttling Alerts
+
+**Symptom:** System logs show alerts like:
+- "Wrong power mode: MAXN_SUPER (should be 2)"
+- "CPU throttling detected: .96GHz (expected 1.728GHz)"
+
+Even though the system is actually in the correct power mode.
+
+**Cause:** This was a bug in the system health monitor that has been fixed. The monitor was:
+1. Comparing power mode NAME (string "MAXN_SUPER") with mode NUMBER (integer 2)
+2. Including efficiency cores (CPUs 4-5 at 729 MHz) in CPU frequency average
+
+**Fixed in:** System health monitor script now correctly:
+- Extracts numeric mode ID from `nvpmodel -q` output
+- Only monitors performance cores (CPUs 0-3) which run at 1.728 GHz
+- Reports accurate "Performance CPU throttling" alerts
+
+**To verify fix is applied:**
+```bash
+# Check monitoring script has been updated
+grep "tail -1" /home/mislav/footballvision-pro/scripts/system_health_monitor.sh
+# Should show: local current_mode=$(nvpmodel -q | tail -1)
+
+# Check CPU monitoring only checks cores 0-3
+grep "for cpu in" /home/mislav/footballvision-pro/scripts/system_health_monitor.sh
+# Should show: for cpu in 0 1 2 3; do
+```
+
+**If you still see these alerts after the fix:**
+- They are now genuine warnings
+- Check actual power mode: `sudo nvpmodel -q`
+- Check actual CPU frequencies: `cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq`
+
+### Issue: Power Mode Not Persisting (Jetson Orin Nano Super)
+
+**Symptom:** After reboot, system is not in Mode 2 (MAXN_SUPER)
+
+**Background:** Jetson Orin Nano Super has specific power modes:
+- Mode 0: 15W (1497.6 MHz max CPU)
+- Mode 1: 25W (1344 MHz max CPU)
+- Mode 2: MAXN_SUPER (1.728 GHz max CPU, unlimited power) - **REQUIRED**
+- Mode 3: 7W (960 MHz, 4 cores only)
+
+**Solution:**
+
+1. **Set to Mode 2:**
+   ```bash
+   sudo nvpmodel -m 2
+   sudo jetson_clocks
+   ```
+
+2. **Make persistent across reboots:**
+   ```bash
+   # Check current stored mode
+   cat /var/lib/nvpmodel/status
+   # Should show: pmode:0002
+
+   # If not, set it:
+   sudo nvpmodel -m 2
+   ```
+
+3. **Verify it persists:**
+   ```bash
+   sudo reboot
+   # After reboot:
+   sudo nvpmodel -q
+   # Should show: NV Power Mode: MAXN_SUPER
+   #              2
+   ```
+
+**Automatic enforcement:** The system health monitor (`/home/mislav/footballvision-pro/scripts/system_health_monitor.sh`) runs every 5 minutes and automatically corrects the power mode if it changes. This ensures Mode 2 is maintained even if something tries to change it.
+
+**Why Mode 2 is critical:**
+- Maximizes performance cores to 1.728 GHz
+- Provides ~2.01 CPU cores per camera for encoding
+- No power limits, preventing thermal throttling under sustained load
+- Required for reliable 30fps dual-camera recording
+
 ### Issue: Low Framerate During Recording
 
 **Symptom:** Recording achieves <20fps instead of 25-30fps
@@ -530,9 +608,9 @@ cat /sys/devices/virtual/thermal/thermal_zone*/temp
 
 **Solutions:**
 
-1. **Set maximum performance mode**
+1. **Set maximum performance mode (Mode 2 for Orin Nano Super)**
    ```bash
-   sudo nvpmodel -m 0
+   sudo nvpmodel -m 2
    sudo jetson_clocks
    ```
 
@@ -622,9 +700,9 @@ cat /proc/swaps
    - Try 8Mbps instead of 12Mbps for recording
    - Try 2Mbps instead of 3Mbps for preview
 
-2. **Ensure maximum performance mode**
+2. **Ensure maximum performance mode (Mode 2 for Orin Nano Super)**
    ```bash
-   sudo nvpmodel -m 0
+   sudo nvpmodel -m 2
    sudo jetson_clocks
    ```
 

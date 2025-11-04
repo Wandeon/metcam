@@ -1,11 +1,11 @@
 # FootballVision Pro v3
 
-Professional dual-camera recording system for football matches on NVIDIA Jetson Orin Nano.
+Professional dual-camera recording system for football matches on NVIDIA Jetson Orin Nano Super.
 
 ## System Overview
 
 **Hardware:**
-- NVIDIA Jetson Orin Nano (8GB recommended)
+- NVIDIA Jetson Orin Nano Super (8GB, 6 cores: 4 performance @ 1.728GHz + 2 efficiency @ 729MHz)
 - 2x Sony IMX477 CSI cameras (4K@30fps)
 - JetPack 6.1+ (tested on 6.1)
 - 32GB+ storage (128GB+ SSD recommended for recordings)
@@ -26,7 +26,7 @@ Professional dual-camera recording system for football matches on NVIDIA Jetson 
 
 ## Quick Deployment
 
-**For new installations on fresh Jetson Orin Nano:**
+**For new installations on fresh Jetson Orin Nano Super:**
 
 ```bash
 # Clone repository
@@ -163,11 +163,12 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 ## System Requirements
 
 ### Hardware
-- NVIDIA Jetson Orin Nano 8GB (or better)
+- NVIDIA Jetson Orin Nano Super 8GB (6 cores: 4 performance @ 1.728GHz + 2 efficiency @ 729MHz)
 - 2x Sony IMX477 CSI camera modules
 - 32GB+ microSD or NVMe SSD (128GB+ recommended)
 - 5V/4A power supply
 - Network connection (Ethernet recommended)
+- **Power mode:** Must be set to Mode 2 (MAXN_SUPER) for reliable 30fps recording
 
 ### Software
 - JetPack 6.1 or higher
