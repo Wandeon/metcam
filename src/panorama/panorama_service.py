@@ -703,9 +703,10 @@ class PanoramaService:
 
             # Build one-shot GStreamer pipeline
             # num-buffers=1 means pipeline will capture one frame and send EOS
+            # Use full sensor resolution (3840x2160) for best calibration accuracy
             pipeline_str = (
                 f"nvarguscamerasrc sensor-id={camera_id} num-buffers=1 ! "
-                f"video/x-raw(memory:NVMM),width=2880,height=1752,framerate=30/1 ! "
+                f"video/x-raw(memory:NVMM),width=3840,height=2160,framerate=30/1 ! "
                 f"nvvidconv ! "
                 f"video/x-raw,format=BGRx ! "
                 f"videoconvert ! "
