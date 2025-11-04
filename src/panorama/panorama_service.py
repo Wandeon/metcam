@@ -679,20 +679,124 @@ class PanoramaService:
                 'message': f'Error starting calibration: {str(e)}'
             }
 
-    def capture_calibration_frame(
-        self,
-        frame_cam0: np.ndarray,
-        frame_cam1: np.ndarray
-    ) -> Dict:
+    def _capture_single_frame(self, camera_id: int) -> Optional[np.ndarray]:
         """
-        Capture frame pair for calibration
+        Capture a single frame from a camera using GStreamer
+
+        Creates a one-shot GStreamer pipeline to capture a single frame from
+        the specified camera. The pipeline uses num-buffers=1 to capture just
+        one frame and then terminates.
 
         Args:
-            frame_cam0: Frame from camera 0
-            frame_cam1: Frame from camera 1
+            camera_id: Camera sensor ID (0 or 1)
 
         Returns:
-            Capture result dictionary
+            BGR frame as NumPy array (H, W, 3) uint8, or None if failed
+
+        Example:
+            >>> frame = self._capture_single_frame(0)
+            >>> if frame is not None:
+            ...     print(f"Captured frame: {frame.shape}")
+        """
+        try:
+            logger.info(f"Capturing single frame from camera {camera_id}...")
+
+            # Build one-shot GStreamer pipeline
+            # num-buffers=1 means pipeline will capture one frame and send EOS
+            pipeline_str = (
+                f"nvarguscamerasrc sensor-id={camera_id} num-buffers=1 ! "
+                f"video/x-raw(memory:NVMM),width=2880,height=1752,framerate=30/1 ! "
+                f"nvvidconv ! "
+                f"video/x-raw,format=BGRx ! "
+                f"videoconvert ! "
+                f"video/x-raw,format=BGR ! "
+                f"appsink name=sink emit-signals=true max-buffers=1 drop=true"
+            )
+
+            logger.debug(f"Creating pipeline: {pipeline_str}")
+
+            # Create and configure pipeline
+            pipeline = Gst.parse_launch(pipeline_str)
+            appsink = pipeline.get_by_name('sink')
+
+            if appsink is None:
+                logger.error("Failed to get appsink from pipeline")
+                return None
+
+            # Variable to store captured frame
+            captured_frame = None
+
+            def on_new_sample(sink):
+                """Callback when new frame is available"""
+                nonlocal captured_frame
+                try:
+                    sample = sink.emit('pull-sample')
+                    if sample:
+                        frame, timestamp_ns, metadata = gst_sample_to_numpy(sample)
+                        if frame is not None:
+                            captured_frame = frame
+                            logger.debug(f"Frame captured: {frame.shape}, timestamp={timestamp_ns}")
+                        else:
+                            logger.error("Failed to convert sample to numpy")
+                    else:
+                        logger.error("Failed to pull sample from appsink")
+                except Exception as e:
+                    logger.error(f"Error in on_new_sample callback: {e}", exc_info=True)
+                return Gst.FlowReturn.OK
+
+            # Connect callback
+            appsink.connect('new-sample', on_new_sample)
+
+            # Start pipeline
+            logger.debug("Starting pipeline...")
+            ret = pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                logger.error("Failed to set pipeline to PLAYING state")
+                pipeline.set_state(Gst.State.NULL)
+                return None
+
+            # Wait for EOS (end of stream - single frame captured) or error
+            bus = pipeline.get_bus()
+            timeout = 5 * Gst.SECOND  # 5 second timeout
+            msg = bus.timed_pop_filtered(
+                timeout,
+                Gst.MessageType.EOS | Gst.MessageType.ERROR
+            )
+
+            # Check what message we got
+            if msg is None:
+                logger.error("Timeout waiting for frame capture")
+                captured_frame = None
+            elif msg.type == Gst.MessageType.ERROR:
+                err, debug = msg.parse_error()
+                logger.error(f"GStreamer error: {err.message}, debug: {debug}")
+                captured_frame = None
+            elif msg.type == Gst.MessageType.EOS:
+                logger.debug("Frame capture completed successfully (EOS received)")
+
+            # Cleanup
+            pipeline.set_state(Gst.State.NULL)
+
+            if captured_frame is not None:
+                logger.info(f"Successfully captured frame from camera {camera_id}: shape={captured_frame.shape}")
+            else:
+                logger.error(f"Failed to capture frame from camera {camera_id}")
+
+            return captured_frame
+
+        except Exception as e:
+            logger.error(f"Failed to capture frame from camera {camera_id}: {e}", exc_info=True)
+            return None
+
+    def capture_calibration_frame(self) -> Dict:
+        """
+        Capture frame pair from cameras for calibration
+
+        This method captures a single frame from both cameras and adds it to
+        the calibration dataset. Call this 10-20 times during calibration.
+
+        Returns:
+            Capture result dictionary with frames_captured count
         """
         try:
             if self.calibration_service is None:
@@ -701,12 +805,52 @@ class PanoramaService:
                     'message': 'Calibration not started'
                 }
 
-            result = self.calibration_service.capture_frame_pair(frame_cam0, frame_cam1)
+            if not self.calibration_service.is_calibrating:
+                return {
+                    'success': False,
+                    'message': 'Calibration not active. Call start_calibration first.'
+                }
 
-            return result
+            # Capture frames from both cameras
+            logger.info("Capturing calibration frame pair...")
+            frame_cam0 = self._capture_single_frame(camera_id=0)
+            frame_cam1 = self._capture_single_frame(camera_id=1)
+
+            if frame_cam0 is None or frame_cam1 is None:
+                return {
+                    'success': False,
+                    'message': 'Failed to capture frames from cameras'
+                }
+
+            # Pass to calibration service
+            timestamp = time.time()
+            success = self.calibration_service.capture_frame_pair(
+                frame_cam0, frame_cam1, timestamp
+            )
+
+            if not success:
+                return {
+                    'success': False,
+                    'message': 'Failed to store calibration frames'
+                }
+
+            # Get updated count
+            progress = self.get_calibration_progress()
+            frames_captured = progress['frames_captured']
+
+            logger.info(f"Calibration frame {frames_captured} captured successfully")
+
+            return {
+                'success': True,
+                'message': f'Frame pair {frames_captured} captured successfully',
+                'frames_captured': frames_captured,
+                'frames_needed': progress['frames_needed'],
+                'frames_target': progress['frames_target'],
+                'ready_to_calculate': progress['ready_to_calculate']
+            }
 
         except Exception as e:
-            logger.error(f"Failed to capture calibration frame: {e}")
+            logger.error(f"Failed to capture calibration frame: {e}", exc_info=True)
             return {
                 'success': False,
                 'message': f'Error capturing frame: {str(e)}'
