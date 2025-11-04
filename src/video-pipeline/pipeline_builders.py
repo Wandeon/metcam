@@ -274,3 +274,59 @@ def build_preview_pipeline(camera_id: int, hls_location: str, config_path: str =
     )
 
     return pipeline
+
+
+def build_panorama_capture_pipeline(
+    camera_id: int,
+    config_path: str = None
+) -> str:
+    """
+    Build GStreamer pipeline for panorama frame capture with HLS output.
+
+    This pipeline extracts frames via appsink for panorama stitching while
+    also providing an HLS preview stream for calibration monitoring.
+
+    Args:
+        camera_id: Camera sensor ID (0 or 1)
+        config_path: Path to camera config (default: standard location)
+
+    Returns:
+        GStreamer pipeline string
+    """
+
+    config = load_camera_config(config_path)
+    cam_config = config["cameras"][str(camera_id)]
+
+    source_section, _, _ = _build_camera_source(camera_id, cam_config)
+
+    hls_location = f"/dev/shm/hls/panorama_cam{camera_id}.m3u8"
+
+    pipeline = "".join(
+        [
+            source_section,
+            "tee name=t ! ",
+
+            # Branch 1: HLS output for preview
+            "queue ! ",
+            "x264enc name=enc speed-preset=ultrafast tune=zerolatency threads=0 ",
+            "bitrate=6000 key-int-max=60 b-adapt=false bframes=0 ",
+            "byte-stream=true aud=true intra-refresh=false ",
+            "option-string=repeat-headers=1:scenecut=0:open-gop=0 ! ",
+            "h264parse config-interval=1 disable-passthrough=true ! ",
+            "video/x-h264,stream-format=byte-stream ! ",
+            "hlssink2 name=sink ",
+            f"playlist-location={hls_location} ",
+            f"location={hls_location.replace('.m3u8', '_%05d.ts')} ",
+            "target-duration=2 ",
+            "playlist-length=8 ",
+            "max-files=8 ",
+            "send-keyframe-requests=true ",
+
+            # Branch 2: appsink for frame extraction
+            "t. ! ",
+            "queue max-size-buffers=2 leaky=downstream ! ",
+            "appsink name=appsink emit-signals=true max-buffers=1 drop=true sync=false",
+        ]
+    )
+
+    return pipeline
