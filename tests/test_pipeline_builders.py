@@ -121,6 +121,8 @@ class TestPipelineBuilders(unittest.TestCase):
             config_path=str(self.config_path),
         )
         self.assertIn("webrtcbin", pipeline)
+        self.assertIn("webrtcbin name=webrtc", pipeline)
+        self.assertIn("! webrtc.", pipeline)
         self.assertIn("stun-server=stun://stun.example.org:3478", pipeline)
         self.assertIn("turn-server=turn://user:pass@turn.example.org:3478", pipeline)
         self.assertIn("rtph264pay", pipeline)
@@ -136,6 +138,8 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("appsrc name=panorama_source", pipeline)
         self.assertIn("width=1920,height=1080,framerate=24/1", pipeline)
         self.assertIn("webrtcbin", pipeline)
+        self.assertIn("webrtcbin name=webrtc", pipeline)
+        self.assertIn("! webrtc.", pipeline)
         self.assertIn("stun-server=stun://stun.example.org:3478", pipeline)
         self.assertIn("turn-server=turn://user:pass@turn.example.org:3478", pipeline)
 
