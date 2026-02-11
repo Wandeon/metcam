@@ -345,9 +345,10 @@ def start_preview(request: PreviewRequest):
     - Transport selected by request.transport or PREVIEW_TRANSPORT_MODE
     """
     api_requests.labels(endpoint='preview', method='POST').inc()
+    holder = f"api-preview-{request.camera_id or 'all'}"
     try:
         # Acquire pipeline lock for preview mode
-        if not pipeline_manager.acquire_lock(PipelineMode.PREVIEW, f"api-preview-{request.camera_id or 'all'}", force=False, timeout=3.0):
+        if not pipeline_manager.acquire_lock(PipelineMode.PREVIEW, holder, force=False, timeout=3.0):
             # Check current lock state to give better error message
             current_state = pipeline_manager.get_state()
             if current_state.get('mode') == 'recording':
@@ -371,6 +372,8 @@ def start_preview(request: PreviewRequest):
             preview_active.set(1)
             logger.info(f"Preview started successfully: {result}")
         else:
+            # If preview failed to start, do not leave preview lock orphaned.
+            pipeline_manager.release_lock(holder)
             logger.warning(f"Preview start failed: {result}")
         
         return result
@@ -396,17 +399,14 @@ def stop_preview(camera_id: Optional[int] = None):
         logger.info(f"Preview stop requested: camera_id={camera_id}")
         
         result = preview_service.stop_preview(camera_id=camera_id)
-
-        if result['success']:
-            # Check if all previews stopped
-            status = preview_service.get_status()
-            if not status['preview_active']:
-                preview_active.set(0)
-                # Release pipeline lock when all previews are stopped
-                pipeline_manager.release_lock(f"api-preview-{camera_id or 'all'}")
-                logger.info(f"Preview stopped and lock released: {result}")
-            else:
-                logger.info(f"Preview stopped but some cameras still active: {result}")
+        status = preview_service.get_status()
+        if not status['preview_active']:
+            preview_active.set(0)
+            # Release pipeline lock when all previews are stopped or already down.
+            pipeline_manager.release_lock(f"api-preview-{camera_id or 'all'}")
+            logger.info(f"Preview inactive and lock released: {result}")
+        elif result['success']:
+            logger.info(f"Preview stopped but some cameras still active: {result}")
         else:
             logger.warning(f"Preview stop failed: {result}")
 
@@ -686,7 +686,8 @@ def _handle_ws_command(action: str, params: dict) -> dict:
     elif action == "start_preview":
         camera_id = params.get("camera_id")
         transport = params.get("transport")
-        if not pipeline_manager.acquire_lock(PipelineMode.PREVIEW, f"api-preview-{camera_id or 'all'}", force=False, timeout=3.0):
+        holder = f"api-preview-{camera_id or 'all'}"
+        if not pipeline_manager.acquire_lock(PipelineMode.PREVIEW, holder, force=False, timeout=3.0):
             current_state = pipeline_manager.get_state()
             if current_state.get("mode") == "recording":
                 raise Exception("Recording is active. Stop recording before starting preview.")
@@ -694,16 +695,17 @@ def _handle_ws_command(action: str, params: dict) -> dict:
         result = preview_service.start_preview(camera_id=camera_id, transport=transport)
         if result.get("success"):
             preview_active.set(1)
+        else:
+            pipeline_manager.release_lock(holder)
         return result
 
     elif action == "stop_preview":
         camera_id = params.get("camera_id")
         result = preview_service.stop_preview(camera_id=camera_id)
-        if result.get("success"):
-            status = preview_service.get_status()
-            if not status["preview_active"]:
-                preview_active.set(0)
-                pipeline_manager.release_lock(f"api-preview-{camera_id or 'all'}")
+        status = preview_service.get_status()
+        if not status["preview_active"]:
+            preview_active.set(0)
+            pipeline_manager.release_lock(f"api-preview-{camera_id or 'all'}")
         return result
 
     elif action == "get_recordings":

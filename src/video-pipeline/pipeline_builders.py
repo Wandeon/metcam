@@ -302,8 +302,11 @@ def build_preview_webrtc_pipeline(
     if webrtc_props:
         webrtc_suffix = " " + " ".join(webrtc_props)
 
+    # webrtcbin requires request pads (sink_%u). We declare the element first
+    # and link RTP payload into `webrtc.` to let gst-launch request a sink pad.
     pipeline = "".join(
         [
+            f"webrtcbin name=webrtc bundle-policy=max-bundle latency=0{webrtc_suffix} ",
             source_section,
             "x264enc name=enc speed-preset=ultrafast tune=zerolatency threads=0 ",
             "bitrate=6000 key-int-max=60 b-adapt=false bframes=0 ",
@@ -312,7 +315,7 @@ def build_preview_webrtc_pipeline(
             "h264parse config-interval=1 disable-passthrough=true ! ",
             "rtph264pay pt=96 config-interval=1 aggregate-mode=zero-latency ! ",
             "application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000 ! ",
-            f"webrtcbin name=webrtc bundle-policy=max-bundle latency=0{webrtc_suffix}",
+            "webrtc.",
         ]
     )
 
@@ -394,6 +397,7 @@ def build_panorama_output_webrtc_pipeline(
         webrtc_suffix = " " + " ".join(webrtc_props)
 
     return (
+        f"webrtcbin name=webrtc bundle-policy=max-bundle latency=0{webrtc_suffix} "
         f"appsrc name=panorama_source is-live=true do-timestamp=true format=time stream-type=stream "
         f"caps=video/x-raw,format=I420,width={width},height={height},framerate={fps}/1 ! "
         "videoconvert ! "
@@ -404,5 +408,5 @@ def build_panorama_output_webrtc_pipeline(
         "h264parse config-interval=1 disable-passthrough=true ! "
         "rtph264pay pt=96 config-interval=1 aggregate-mode=zero-latency ! "
         "application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000 ! "
-        f"webrtcbin name=webrtc bundle-policy=max-bundle latency=0{webrtc_suffix}"
+        "webrtc."
     )

@@ -38,6 +38,7 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("isinstance(e, StarletteHTTPException)", body)
         self.assertIn("status_code=e.status_code", body)
         self.assertIn("detail=e.detail", body)
+        self.assertIn("pipeline_manager.release_lock(holder)", body)
 
     def test_dashboard_has_transport_level_rest_fallback(self) -> None:
         source = (ROOT / "src/platform/web-dashboard/src/pages/Dashboard.tsx").read_text(encoding="utf-8")
@@ -60,6 +61,18 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("cached = self._recent_commands[cmd_id].get(\"result\")", source)
         self.assertIn("replay[\"deduplicated\"] = True", source)
         self.assertIn("\"in_progress\": True", source)
+
+    def test_ws_preview_releases_lock_on_failed_start(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        section_match = re.search(
+            r"elif action == \"start_preview\":(?P<body>.*?)elif action == \"stop_preview\":",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(section_match, "start_preview WS command block not found")
+        body = section_match.group("body")
+        self.assertIn("holder = f\"api-preview-{camera_id or 'all'}\"", body)
+        self.assertIn("pipeline_manager.release_lock(holder)", body)
 
     def test_webrtc_signaling_handlers_are_registered(self) -> None:
         source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
