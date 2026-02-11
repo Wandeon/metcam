@@ -165,9 +165,28 @@ Example response:
   "recovery_attempts": {
     "camera_0": 0,
     "camera_1": 0
+  },
+  "camera_diagnostics": {
+    "camera_0": {
+      "pipeline_present": true,
+      "pipeline_state": "running",
+      "latest_segment": "cam0_20260211_220241_00.mp4",
+      "latest_segment_size": 4035962,
+      "latest_segment_age_seconds": 1.8,
+      "integrity_probe": {
+        "checked": false,
+        "ok": null,
+        "error": null
+      }
+    }
   }
 }
 ```
+
+Notes:
+- `camera_diagnostics` is always returned for active recordings.
+- `integrity_probe.checked=true` appears only when a segment is large and stable enough to probe safely.
+- If probing fails, health is reported as unhealthy with a `Segment probe failed (...)` issue.
 
 ### Preview
 
