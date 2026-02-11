@@ -49,6 +49,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.ws_module = load_ws_manager_module()
         self.original_status_interval = self.ws_module.CHANNEL_INTERVALS["status"]
+        self.original_system_metrics_interval = self.ws_module.CHANNEL_INTERVALS["system_metrics"]
         self.ws_module.CHANNEL_INTERVALS["status"] = 0.05
         self.manager = self.ws_module.ConnectionManager()
         self.status_counter = 0
@@ -58,7 +59,10 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
             return {"counter": self.status_counter}
 
         self.manager.set_data_sources(
-            sources={"status": status_getter},
+            sources={
+                "status": status_getter,
+                "system_metrics": lambda: {"cpu": 42},
+            },
             command_handler=lambda action, params: {"action": action, "params": params},
         )
         self.ws = FakeWebSocket()
@@ -67,6 +71,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.manager.shutdown()
         self.ws_module.CHANNEL_INTERVALS["status"] = self.original_status_interval
+        self.ws_module.CHANNEL_INTERVALS["system_metrics"] = self.original_system_metrics_interval
 
     async def test_connect_sends_hello(self) -> None:
         self.assertTrue(self.ws.accepted)
@@ -183,6 +188,20 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         await self.manager.handle_message(self.ws, json.dumps({"v": 999, "type": "ping"}))
         self.assertEqual(self.ws.sent[-1]["type"], "error")
         self.assertEqual(self.ws.sent[-1]["code"], "invalid_version")
+
+    async def test_subscribe_triggers_immediate_refresh(self) -> None:
+        # Make the periodic interval very long so only eager refresh can pass.
+        self.ws_module.CHANNEL_INTERVALS["system_metrics"] = 60.0
+
+        await self.manager.handle_message(
+            self.ws,
+            json.dumps({"v": 1, "type": "subscribe", "channels": ["system_metrics"]}),
+        )
+
+        await asyncio.sleep(0.2)
+        metrics_messages = [m for m in self.ws.sent if m["type"] == "system_metrics"]
+        self.assertGreaterEqual(len(metrics_messages), 1)
+        self.assertEqual(metrics_messages[-1]["data"]["cpu"], 42)
 
 
 if __name__ == "__main__":

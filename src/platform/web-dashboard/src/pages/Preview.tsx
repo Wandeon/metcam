@@ -22,7 +22,7 @@ function transformPreviewStatus(raw: StatusResponseV3): PreviewStatus {
 }
 
 async function fetchStatusRaw(): Promise<StatusResponseV3> {
-  const response = await fetch('/api/v1/status');
+  const response = await fetch('/api/v1/status', { cache: 'no-store' });
   return response.json();
 }
 

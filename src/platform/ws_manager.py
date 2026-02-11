@@ -155,6 +155,12 @@ class ConnectionManager:
             valid = set(channels) & ALL_CHANNELS
             if websocket in self._connections:
                 self._connections[websocket] |= valid
+            # Push fresh data immediately after subscribe instead of waiting
+            # for the next interval tick.
+            for channel in valid:
+                event = self._refresh_events.get(channel)
+                if event:
+                    event.set()
             self._ensure_broadcast_loops()
 
         elif msg_type == "unsubscribe":
@@ -350,8 +356,10 @@ class ConnectionManager:
                     else:
                         await asyncio.sleep(interval)
                 except asyncio.TimeoutError:
-                    if event:
-                        event.clear()
+                    # Keep event state unchanged on timeout. A concurrent
+                    # refresh signal can arrive around timeout boundaries; if
+                    # we clear here we can drop that signal and delay updates.
+                    pass
 
                 # Skip if previous getter still running (prevents pileup)
                 if self._channel_running.get(channel, False):
