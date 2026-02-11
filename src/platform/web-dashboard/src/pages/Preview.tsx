@@ -59,7 +59,7 @@ export const Preview: React.FC = () => {
     setIsStarting(true);
     try {
       if (wsConnected) {
-        await sendCommand('start_preview', { mode: 'normal' });
+        await sendCommand('start_preview');
       } else {
         const status = await apiService.getStatus();
         if (status.recording) {
@@ -84,7 +84,7 @@ export const Preview: React.FC = () => {
     setIsStarting(true);
     try {
       if (wsConnected) {
-        await sendCommand('start_preview', { mode: 'calibration' });
+        await sendCommand('start_preview');
       } else {
         const status = await apiService.getStatus();
         if (status.recording) {
