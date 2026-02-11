@@ -2,7 +2,7 @@
   "version": "1.0",
   "_comment": "Camera configuration for FootballVision Pro - See src/video-pipeline/README.md for details",
   "recording_quality": "fast",
-  "_quality_comment": "Recording quality preset: 'high' (25Mbps, veryfast, bframes=1), 'balanced' (22Mbps, superfast, bframes=1), or 'fast' (20Mbps, ultrafast, bframes=0). Default: fast",
+  "_quality_comment": "Recording quality preset: 'high' (25Mbps, superfast, bframes=1), 'balanced' (22Mbps, superfast, bframes=1), or 'fast' (20Mbps, ultrafast, bframes=0). Default: fast",
   "recording_require_all_cameras": true,
   "_recording_require_all_cameras_comment": "If true, recording start fails unless both cameras start successfully; prevents one-sided captures.",
   "recording_recovery_max_attempts": 2,

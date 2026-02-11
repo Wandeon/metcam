@@ -175,7 +175,7 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
         quality_preset: Recording quality preset - "high" (default), "balanced", or "fast"
 
     Quality Presets:
-        high: Archival profile (veryfast, bframes=2, lookahead=20, 25Mbps)
+        high: Archival profile (superfast, bframes=1, lookahead=10, 25Mbps)
         balanced: Mid profile (superfast, bframes=1, lookahead=10, 22Mbps)
         fast: Stability-first profile (ultrafast, no bframes/lookahead, 20Mbps)
     """
@@ -188,7 +188,7 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
     # Define quality presets
     presets = {
         "high": {
-            "speed_preset": "veryfast",
+            "speed_preset": "superfast",
             "tune": 0x00000000,  # No tune flags (not zerolatency)
             "psy_tune": "film",
             "bitrate": 25000,

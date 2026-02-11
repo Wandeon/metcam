@@ -108,7 +108,7 @@ class TestPipelineBuilders(unittest.TestCase):
             config_path=str(self.config_path),
             quality_preset="does_not_exist",
         )
-        self.assertIn("speed-preset=veryfast", pipeline)
+        self.assertIn("speed-preset=superfast", pipeline)
         self.assertIn("bitrate=25000", pipeline)
         self.assertIn("bframes=1", pipeline)
         self.assertIn("vbv-maxrate=25000", pipeline)
