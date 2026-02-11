@@ -26,6 +26,8 @@ class FakeGStreamerManager:
         self.create_results: dict[str, bool] = {}
         self.start_results: dict[str, bool] = {}
         self.stop_results: dict[str, bool] = {}
+        self.stop_timeout_flags: dict[str, bool] = {}
+        self.stop_timeouts: dict[str, list[float]] = {}
         self.statuses: dict[str, FakePipelineStatus] = {}
         self.create_calls: list[str] = []
         self.start_calls: list[str] = []
@@ -53,11 +55,22 @@ class FakeGStreamerManager:
         return ok
 
     def stop_pipeline(self, name, wait_for_eos=True, timeout=5.0):
+        details = self.stop_pipeline_with_details(name, wait_for_eos=wait_for_eos, timeout=timeout)
+        return details["success"]
+
+    def stop_pipeline_with_details(self, name, wait_for_eos=True, timeout=5.0):
         self.stop_calls.append(name)
+        self.stop_timeouts.setdefault(name, []).append(timeout)
         ok = self.stop_results.get(name, True)
+        timed_out = bool(wait_for_eos and self.stop_timeout_flags.get(name, False))
         if ok:
             self.statuses.pop(name, None)
-        return ok
+        return {
+            "success": ok,
+            "eos_received": bool(ok and wait_for_eos and not timed_out),
+            "timed_out": timed_out,
+            "error": None if ok else "stop failed",
+        }
 
     def remove_pipeline(self, name):
         self.remove_calls.append(name)
@@ -207,6 +220,33 @@ class TestRecordingService(unittest.TestCase):
         force_stop = self.service.stop_recording(force=True)
         self.assertTrue(force_stop["success"])
         self.assertEqual(self.service.current_match_id, None)
+
+    def test_stop_recording_returns_graceful_stop_metadata(self) -> None:
+        start = self.service.start_recording("match_stop_metadata", process_after_recording=False)
+        self.assertTrue(start["success"])
+        self.service.recording_start_time = time.time() - 20
+
+        stop = self.service.stop_recording(force=False)
+        self.assertTrue(stop["success"])
+        self.assertTrue(stop["graceful_stop"])
+        self.assertIn("camera_0", stop["camera_stop_results"])
+        self.assertIn("camera_1", stop["camera_stop_results"])
+        self.assertTrue(stop["camera_stop_results"]["camera_0"]["eos_received"])
+        self.assertFalse(stop["camera_stop_results"]["camera_0"]["timed_out"])
+
+    def test_stop_recording_timeout_reports_non_graceful_and_respects_timeout_setting(self) -> None:
+        self.service.stop_eos_timeout_seconds = 9.5
+        start = self.service.start_recording("match_stop_timeout", process_after_recording=False)
+        self.assertTrue(start["success"])
+        self.service.recording_start_time = time.time() - 20
+        self.service.gst_manager.stop_timeout_flags["recording_cam1"] = True
+
+        stop = self.service.stop_recording(force=False)
+        self.assertTrue(stop["success"])
+        self.assertFalse(stop["graceful_stop"])
+        self.assertTrue(stop["camera_stop_results"]["camera_1"]["timed_out"])
+        self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam0"][-1], 9.5)
+        self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam1"][-1], 9.5)
 
     def test_stop_recording_triggers_post_processing_when_enabled(self) -> None:
         calls: list[str] = []
