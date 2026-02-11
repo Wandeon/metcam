@@ -201,8 +201,6 @@ rm -f "$PREVIEW_BODY_FILE"
 
 if [ "$PREVIEW_HTTP" = "400" ] || [ "$PREVIEW_HTTP" = "503" ]; then
     log_success "Preview correctly blocked while recording active (HTTP $PREVIEW_HTTP)"
-elif [ "$PREVIEW_HTTP" = "500" ] && echo "$PREVIEW_BODY" | grep -q "Recording is active"; then
-    log_warning "Preview blocked but API returned 500 wrapper for recording lock conflict"
 else
     log_error "Preview should be blocked during recording. HTTP=$PREVIEW_HTTP body=$PREVIEW_BODY"
 fi
