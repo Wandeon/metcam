@@ -9,9 +9,9 @@ import time
 import json
 import logging
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from datetime import datetime
-from threading import Lock
+from threading import Lock, Thread
 
 from gstreamer_manager import GStreamerManager
 from pipeline_builders import build_recording_pipeline, load_camera_config
@@ -33,12 +33,18 @@ class RecordingService:
 
         # Recording policy (loaded from camera config with safe defaults)
         self.require_all_cameras = True
-        
+        self.max_recovery_attempts = 2
+        self.recovery_backoff_seconds = 1.0
+
         # Recording state
         self.current_match_id: Optional[str] = None
         self.recording_start_time: Optional[float] = None
         self.process_after_recording: bool = False  # Post-processing flag
         self.state_lock = Lock()
+
+        # Camera-level recovery and degraded-state tracking
+        self.camera_recovery_state: Dict[int, Dict[str, Any]] = {}
+        self.degraded_cameras: Dict[str, str] = {}
         
         # Recording protection
         self.protection_seconds = 10.0  # Don't allow stop within first 10s
@@ -48,7 +54,9 @@ class RecordingService:
         
         # Camera IDs
         self.camera_ids = [0, 1]
-        
+
+        self._init_recovery_state()
+
         # Load persisted state on startup
         self._load_recording_policy()
         self._load_state()
@@ -58,12 +66,200 @@ class RecordingService:
         try:
             config = load_camera_config()
             self.require_all_cameras = bool(config.get('recording_require_all_cameras', True))
+            self.max_recovery_attempts = max(0, int(config.get('recording_recovery_max_attempts', 2)))
+            self.recovery_backoff_seconds = max(0.0, float(config.get('recording_recovery_backoff_seconds', 1.0)))
         except Exception as e:
             logger.warning(
                 "Failed to load recording policy from config: %s. Using defaults.",
                 e,
             )
             self.require_all_cameras = True
+            self.max_recovery_attempts = 2
+            self.recovery_backoff_seconds = 1.0
+
+    def _init_recovery_state(self):
+        """Reset per-camera recovery state for the current recording session."""
+        self.camera_recovery_state = {
+            cam_id: {
+                'attempts': 0,
+                'recovering': False,
+                'last_error': None,
+                'last_recovery_ts': None,
+                'failed_permanently': False,
+            }
+            for cam_id in self.camera_ids
+        }
+        self.degraded_cameras = {}
+
+    @staticmethod
+    def _build_output_pattern(match_dir: Path, cam_id: int) -> str:
+        """Build timestamped splitmux output pattern for a camera."""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        return str(match_dir / f"cam{cam_id}_{timestamp}_%02d.mp4")
+
+    def _get_recording_quality_preset(self) -> str:
+        """Get configured recording quality preset with safe fallback."""
+        try:
+            config = load_camera_config()
+            return config.get('recording_quality', 'high')
+        except Exception as e:
+            logger.warning("Failed to load quality preset from config: %s, using 'high'", e)
+            return 'high'
+
+    def _handle_pipeline_error(self, camera_id: int, match_id: str, error: Any, debug: Any):
+        """Schedule bounded camera pipeline recovery after an asynchronous pipeline error."""
+        error_message = str(error)
+        if debug:
+            error_message = f"{error_message} (debug={debug})"
+
+        with self.state_lock:
+            if self.current_match_id != match_id:
+                logger.info(
+                    "Ignoring pipeline error for camera %s because match %s is no longer active",
+                    camera_id,
+                    match_id,
+                )
+                return
+
+            state = self.camera_recovery_state.setdefault(
+                camera_id,
+                {
+                    'attempts': 0,
+                    'recovering': False,
+                    'last_error': None,
+                    'last_recovery_ts': None,
+                    'failed_permanently': False,
+                },
+            )
+            state['last_error'] = error_message
+
+            if state.get('recovering'):
+                logger.warning(
+                    "Camera %s already recovering; suppressing duplicate error signal",
+                    camera_id,
+                )
+                return
+
+            if state['attempts'] >= self.max_recovery_attempts:
+                state['failed_permanently'] = True
+                self.degraded_cameras[f"camera_{camera_id}"] = error_message
+                logger.error(
+                    "Camera %s exhausted recovery attempts (%s). Marking degraded.",
+                    camera_id,
+                    self.max_recovery_attempts,
+                )
+                return
+
+            next_attempt = state['attempts'] + 1
+            state['attempts'] = next_attempt
+            state['recovering'] = True
+
+        logger.warning(
+            "Scheduling recovery for camera %s (attempt %s/%s)",
+            camera_id,
+            next_attempt,
+            self.max_recovery_attempts,
+        )
+        Thread(
+            target=self._recover_camera_pipeline,
+            args=(camera_id, match_id, next_attempt),
+            daemon=True,
+        ).start()
+
+    def _recover_camera_pipeline(self, camera_id: int, match_id: str, attempt: int):
+        """Attempt to recover a single recording camera pipeline."""
+        delay = min(5.0, self.recovery_backoff_seconds * max(1, attempt))
+        if delay > 0:
+            time.sleep(delay)
+
+        pipeline_name = f"recording_cam{camera_id}"
+        with self.state_lock:
+            if self.current_match_id != match_id:
+                state = self.camera_recovery_state.get(camera_id)
+                if state:
+                    state['recovering'] = False
+                return
+
+        try:
+            match_dir = self.base_recordings_dir / match_id / "segments"
+            output_pattern = self._build_output_pattern(match_dir, camera_id)
+            quality_preset = self._get_recording_quality_preset()
+            pipeline_str = build_recording_pipeline(camera_id, output_pattern, quality_preset=quality_preset)
+
+            def on_eos(name, metadata):
+                logger.info("Recovered pipeline %s received EOS", name)
+
+            def on_error(name, error, debug, metadata, camera_id=camera_id, match_id=match_id):
+                logger.error("Recovered pipeline %s error: %s, debug: %s", name, error, debug)
+                self._handle_pipeline_error(camera_id, match_id, error, debug)
+
+            # Best-effort cleanup of the broken pipeline before recreation.
+            try:
+                self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=False, timeout=1.0)
+            except Exception as stop_error:
+                logger.warning("Failed to stop pipeline %s during recovery: %s", pipeline_name, stop_error)
+            try:
+                self.gst_manager.remove_pipeline(pipeline_name)
+            except Exception as remove_error:
+                logger.warning("Failed to remove pipeline %s during recovery: %s", pipeline_name, remove_error)
+
+            created = self.gst_manager.create_pipeline(
+                name=pipeline_name,
+                pipeline_description=pipeline_str,
+                on_eos=on_eos,
+                on_error=on_error,
+                metadata={'camera_id': camera_id, 'match_id': match_id},
+            )
+            started = created and self.gst_manager.start_pipeline(pipeline_name)
+            failure_reason = None
+            if not created:
+                failure_reason = "create_pipeline returned False"
+            elif not started:
+                failure_reason = "start_pipeline returned False"
+        except Exception as e:
+            started = False
+            failure_reason = str(e)
+
+        with self.state_lock:
+            state = self.camera_recovery_state.setdefault(
+                camera_id,
+                {
+                    'attempts': 0,
+                    'recovering': False,
+                    'last_error': None,
+                    'last_recovery_ts': None,
+                    'failed_permanently': False,
+                },
+            )
+            state['recovering'] = False
+            state['last_recovery_ts'] = time.time()
+
+            if started:
+                state['last_error'] = None
+                state['failed_permanently'] = False
+                self.degraded_cameras.pop(f"camera_{camera_id}", None)
+                logger.info("Camera %s recovery succeeded on attempt %s", camera_id, attempt)
+                return
+
+            state['last_error'] = failure_reason
+            if state['attempts'] >= self.max_recovery_attempts:
+                state['failed_permanently'] = True
+                self.degraded_cameras[f"camera_{camera_id}"] = failure_reason
+                logger.error(
+                    "Camera %s recovery failed after %s attempts: %s",
+                    camera_id,
+                    state['attempts'],
+                    failure_reason,
+                )
+                return
+
+        logger.warning(
+            "Camera %s recovery attempt %s failed (%s); retrying.",
+            camera_id,
+            attempt,
+            failure_reason,
+        )
+        self._handle_pipeline_error(camera_id, match_id, failure_reason, None)
     
     def _load_state(self):
         """Load persisted recording state from disk"""
@@ -132,7 +328,10 @@ class RecordingService:
                     'recording': False,
                     'match_id': None,
                     'duration': 0.0,
-                    'cameras': {}
+                    'cameras': {},
+                    'degraded': False,
+                    'degraded_cameras': {},
+                    'camera_recovery': {},
                 }
             
             # Calculate duration
@@ -149,13 +348,28 @@ class RecordingService:
                         "state": info.state.value,
                         "uptime": (datetime.utcnow() - info.start_time).total_seconds() if info.start_time else 0.0
                     }
+
+            camera_recovery = {
+                f"camera_{cam_id}": {
+                    "attempts": state.get('attempts', 0),
+                    "recovering": state.get('recovering', False),
+                    "failed_permanently": state.get('failed_permanently', False),
+                    "last_error": state.get('last_error'),
+                    "last_recovery_ts": state.get('last_recovery_ts'),
+                }
+                for cam_id, state in self.camera_recovery_state.items()
+            }
             
             return {
                 'recording': True,
                 'match_id': self.current_match_id,
                 'duration': duration,
                 'cameras': cameras,
-                'protected': duration < self.protection_seconds
+                'protected': duration < self.protection_seconds,
+                'require_all_cameras': self.require_all_cameras,
+                'degraded': bool(self.degraded_cameras),
+                'degraded_cameras': self.degraded_cameras.copy(),
+                'camera_recovery': camera_recovery,
             }
     
     def start_recording(self, match_id: str, force: bool = False, process_after_recording: bool = False) -> Dict:
@@ -187,6 +401,8 @@ class RecordingService:
             match_dir.mkdir(parents=True, exist_ok=True)
             
             logger.info(f"Starting recording for match: {match_id}")
+
+            self._init_recovery_state()
             
             # Start both cameras
             started_cameras = []
@@ -194,19 +410,8 @@ class RecordingService:
             
             for cam_id in self.camera_ids:
                 try:
-                    # Build output pattern
-                    # Generate timestamp-based filename pattern for segments
-                    from datetime import datetime
-                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    output_pattern = str(match_dir / f"cam{cam_id}_{timestamp}_%02d.mp4")
-
-                    # Get quality preset from config (default to 'high')
-                    try:
-                        config = load_camera_config()
-                        quality_preset = config.get('recording_quality', 'high')
-                    except Exception as e:
-                        logger.warning(f"Failed to load quality preset from config: {e}, using 'high'")
-                        quality_preset = 'high'
+                    output_pattern = self._build_output_pattern(match_dir, cam_id)
+                    quality_preset = self._get_recording_quality_preset()
 
                     # Build pipeline with quality preset
                     pipeline_str = build_recording_pipeline(cam_id, output_pattern, quality_preset=quality_preset)
@@ -218,9 +423,9 @@ class RecordingService:
                     def on_eos(name, metadata):
                         logger.info(f"Pipeline {name} received EOS")
                     
-                    def on_error(name, error, debug, metadata):
+                    def on_error(name, error, debug, metadata, camera_id=cam_id, match_id=match_id):
                         logger.error(f"Pipeline {name} error: {error}, debug: {debug}")
-                        # TODO: Add auto-recovery logic here
+                        self._handle_pipeline_error(camera_id, match_id, error, debug)
                     
                     created = self.gst_manager.create_pipeline(
                         name=pipeline_name,
@@ -348,6 +553,7 @@ class RecordingService:
         self.current_match_id = None
         self.recording_start_time = None
         self.process_after_recording = False
+        self._init_recovery_state()
         self._clear_state()
 
         # Start post-processing in background (after state is cleared)
