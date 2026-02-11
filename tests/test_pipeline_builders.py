@@ -107,6 +107,16 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("vbv-maxrate=25000", pipeline)
         self.assertIn("vbv-bufsize=50000", pipeline)
 
+    def test_build_recording_pipeline_fast_uses_longer_gop(self) -> None:
+        pipeline = self.module.build_recording_pipeline(
+            camera_id=0,
+            output_pattern="/tmp/cam0_%02d.mp4",
+            config_path=str(self.config_path),
+            quality_preset="fast",
+        )
+        self.assertIn("speed-preset=ultrafast", pipeline)
+        self.assertIn("key-int-max=120", pipeline)
+
     def test_build_preview_pipeline_contains_hls_outputs(self) -> None:
         pipeline = self.module.build_preview_pipeline(
             camera_id=1,
