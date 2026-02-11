@@ -60,6 +60,20 @@ Per camera flow:
 - `balanced`: `fast`, film tune, 22 Mbps
 - `fast`: `ultrafast`, 20 Mbps
 
+### GOP Tuning Validation (Issue #40, 2026-02-11)
+
+Real-device A/B runs on metcam (dual-camera, 30s recording, same workflow) were used
+to evaluate longer GOP settings for CPU reduction.
+
+| fast preset `key-int-max` | CPU avg | CPU p95 | Cam0 fps | Cam1 fps | Keyframes | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 90 (baseline) | 70.49% | 93.40% | 30.00 | 29.95 | 9 / 9 | Stable stop/finalization |
+| 120 | 70.95% / 70.82% | 93.77% / 93.70% | 30.00 / 29.91 | 29.98 / 29.99 | 7 / 7 | No CPU win vs baseline |
+| 180 | 77.28% | 95.68% | 30.00 | 29.98 | 4 / 5 | Regression; cam1 segment duration overshot to ~34.29s |
+
+Conclusion: keep `fast` preset at `key-int-max=90` as the validated baseline for
+stability and CPU behavior on current hardware/software.
+
 ### Recording stop behavior (critical)
 
 Recording uses **EOS stop** for clean segment finalization:
