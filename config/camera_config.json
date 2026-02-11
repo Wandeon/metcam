@@ -5,6 +5,10 @@
   "_quality_comment": "Recording quality preset: 'high' (25Mbps, veryfast, bframes), 'balanced' (22Mbps, fast), or 'fast' (20Mbps, ultrafast). Default: high",
   "recording_require_all_cameras": true,
   "_recording_require_all_cameras_comment": "If true, recording start fails unless both cameras start successfully; prevents one-sided captures.",
+  "recording_recovery_max_attempts": 2,
+  "_recording_recovery_max_attempts_comment": "Number of automatic per-camera restart attempts after asynchronous pipeline errors before marking recording degraded.",
+  "recording_recovery_backoff_seconds": 1.0,
+  "_recording_recovery_backoff_seconds_comment": "Base seconds for linear backoff between camera recovery attempts.",
   "cameras": {
     "0": {
       "rotation": 0.0,

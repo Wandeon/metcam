@@ -31,12 +31,18 @@ class FakeGStreamerManager:
         self.start_calls: list[str] = []
         self.stop_calls: list[str] = []
         self.remove_calls: list[str] = []
+        self.on_error_callbacks: dict[str, object] = {}
+        self.on_eos_callbacks: dict[str, object] = {}
+        self.metadata: dict[str, dict] = {}
 
     def create_pipeline(self, name, pipeline_description, on_eos, on_error, metadata):
         self.create_calls.append(name)
         ok = self.create_results.get(name, True)
         if ok:
             self.statuses[name] = FakePipelineStatus(state="created")
+            self.on_error_callbacks[name] = on_error
+            self.on_eos_callbacks[name] = on_eos
+            self.metadata[name] = metadata
         return ok
 
     def start_pipeline(self, name):
@@ -56,10 +62,28 @@ class FakeGStreamerManager:
     def remove_pipeline(self, name):
         self.remove_calls.append(name)
         self.statuses.pop(name, None)
+        self.on_error_callbacks.pop(name, None)
+        self.on_eos_callbacks.pop(name, None)
+        self.metadata.pop(name, None)
         return True
 
     def get_pipeline_status(self, name):
         return self.statuses.get(name)
+
+    def emit_error(self, name, error="boom", debug="debug"):
+        callback = self.on_error_callbacks.get(name)
+        if callback is None:
+            raise AssertionError(f"No error callback registered for {name}")
+        callback(name, error, debug, self.metadata.get(name, {}))
+
+
+def wait_for(condition, timeout=1.0, interval=0.01):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if condition():
+            return True
+        time.sleep(interval)
+    return condition()
 
 
 def load_recording_service_module():
@@ -123,6 +147,44 @@ class TestRecordingService(unittest.TestCase):
         self.assertEqual(result["cameras_failed"], [1])
         self.assertEqual(self.service.current_match_id, "match_partial")
         self.assertFalse(result["require_all_cameras"])
+
+    def test_pipeline_error_auto_recovers_camera(self) -> None:
+        self.service.max_recovery_attempts = 1
+        self.service.recovery_backoff_seconds = 0.0
+        start = self.service.start_recording("match_recover", process_after_recording=False)
+        self.assertTrue(start["success"])
+
+        self.service.gst_manager.emit_error("recording_cam0", error="encoder-fault", debug="simulated")
+
+        self.assertTrue(
+            wait_for(lambda: self.service.gst_manager.start_calls.count("recording_cam0") >= 2),
+            "Camera recovery did not restart cam0 pipeline",
+        )
+
+        status = self.service.get_status()
+        self.assertFalse(status["degraded"])
+        self.assertIsNone(status["camera_recovery"]["camera_0"]["last_error"])
+        self.assertEqual(status["camera_recovery"]["camera_0"]["attempts"], 1)
+
+    def test_pipeline_error_marks_degraded_after_recovery_exhausted(self) -> None:
+        self.service.max_recovery_attempts = 1
+        self.service.recovery_backoff_seconds = 0.0
+        start = self.service.start_recording("match_degraded", process_after_recording=False)
+        self.assertTrue(start["success"])
+
+        # Force recovery create failure after initial successful startup.
+        self.service.gst_manager.create_results["recording_cam0"] = False
+        self.service.gst_manager.emit_error("recording_cam0", error="fatal-camera-error", debug="simulated")
+
+        self.assertTrue(
+            wait_for(lambda: self.service.get_status()["degraded"]),
+            "Recording never reached degraded state after failed recovery",
+        )
+
+        status = self.service.get_status()
+        self.assertTrue(status["degraded"])
+        self.assertIn("camera_0", status["degraded_cameras"])
+        self.assertTrue(status["camera_recovery"]["camera_0"]["failed_permanently"])
 
     def test_start_recording_all_failures(self) -> None:
         self.service.gst_manager.start_results["recording_cam0"] = False
