@@ -30,8 +30,8 @@ Professional dual-camera recording system for football matches on NVIDIA Jetson 
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/footballvision-pro.git
-cd footballvision-pro
+git clone https://github.com/Wandeon/metcam.git
+cd metcam
 
 # One-command installation (~10 minutes)
 chmod +x deploy/install-complete.sh

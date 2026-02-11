@@ -20,8 +20,8 @@ Complete deployment guide for installing FootballVision Pro v3 on NVIDIA Jetson 
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/footballvision-pro.git
-cd footballvision-pro
+git clone https://github.com/Wandeon/metcam.git
+cd metcam
 
 # Run complete installation (takes ~10 minutes)
 chmod +x deploy/install-complete.sh
@@ -80,7 +80,7 @@ The complete installation script handles everything automatically:
 
 ```bash
 # Navigate to repository
-cd footballvision-pro
+cd metcam
 
 # Run installation
 ./deploy/install-complete.sh
@@ -380,8 +380,8 @@ sudo rm -rf /dev/shm/hls
 ## Support
 
 For issues, questions, or contributions:
-- **Issues:** https://github.com/YOUR_USERNAME/footballvision-pro/issues
-- **Documentation:** https://github.com/YOUR_USERNAME/footballvision-pro/docs
+- **Issues:** https://github.com/Wandeon/metcam/issues
+- **Documentation:** https://github.com/Wandeon/metcam/tree/main/docs
 
 ---
 
