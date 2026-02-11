@@ -59,7 +59,7 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
     This function creates a GStreamer pipeline that:
     1. Captures video from nvarguscamerasrc (NVIDIA Argus camera)
     2. Crops the video using VIC hardware acceleration
-    3. Converts color space using VIC (NVMM to CPU NV12 for encoder input)
+    3. Converts color space using VIC (NVMM to I420)
 
     CRITICAL: nvvidconv crop coordinate system
     ==========================================
@@ -156,9 +156,9 @@ def _build_camera_source(camera_id: int, cam_config: Dict[str, Any]) -> Tuple[st
         f"video/x-raw(memory:NVMM),format={SENSOR_FORMAT},width={output_width},"
         f"height={output_height} ! "
 
-        # Hardware colour conversion to CPU memory for x264enc (NV12 supported directly).
+        # Hardware colour conversion to CPU memory for x264enc
         "nvvidconv ! "
-        f"video/x-raw,format=NV12,width={output_width},height={output_height},"
+        f"video/x-raw,format=I420,width={output_width},height={output_height},"
         f"colorimetry=bt709,interlace-mode=progressive ! "
     )
 
