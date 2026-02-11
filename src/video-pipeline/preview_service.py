@@ -77,6 +77,8 @@ class PreviewService:
             Dict with status and message
         """
         with self.state_lock:
+            # Recreate HLS directory in case tmpfs was cleared while service kept running.
+            self.hls_base_dir.mkdir(parents=True, exist_ok=True)
             cameras_to_start = [camera_id] if camera_id is not None else self.camera_ids
             
             started_cameras = []
@@ -175,6 +177,15 @@ class PreviewService:
         """
         with self.state_lock:
             cameras_to_stop = [camera_id] if camera_id is not None else self.camera_ids
+
+            # Stop exposure sync before tearing down pipelines to avoid concurrent
+            # access while sinks are being dismantled.
+            stop_exposure_sync = camera_id is None
+            if stop_exposure_sync:
+                exposure_service = get_exposure_sync_service()
+                if exposure_service:
+                    exposure_service.stop()
+                    logger.info("Exposure synchronization service stopped")
             
             stopped_cameras = []
             failed_cameras = []
@@ -187,8 +198,9 @@ class PreviewService:
                 pipeline_name = f'preview_cam{cam_id}'
                 
                 try:
-                    # Stop pipeline (graceful with EOS)
-                    stopped = self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=True, timeout=3.0)
+                    # For preview, avoid EOS teardown with hlssink2/splitmuxsink.
+                    # Fast NULL transition is more stable than EOS on rapid stop.
+                    stopped = self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=False, timeout=1.0)
                     if not stopped:
                         logger.warning(f"Preview pipeline {pipeline_name} stop request returned False")
                         failed_cameras.append(cam_id)
@@ -208,13 +220,6 @@ class PreviewService:
                     'message': 'No preview cameras were stopped',
                     'failed_cameras': failed_cameras
                 }
-
-            # Stop exposure synchronization if all cameras stopped
-            if camera_id is None or len(stopped_cameras) == len(self.camera_ids):
-                exposure_service = get_exposure_sync_service()
-                if exposure_service:
-                    exposure_service.stop()
-                    logger.info("Exposure synchronization service stopped")
 
             return {
                 'success': True,

@@ -1,0 +1,164 @@
+import importlib.util
+import shutil
+import sys
+import tempfile
+import time
+import types
+import unittest
+from datetime import datetime
+from pathlib import Path
+
+
+EVENT_LOG: list[str] = []
+
+
+class _FakeState:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _FakeState) and self.value == other.value
+
+
+class _FakePipelineState:
+    RUNNING = _FakeState("running")
+    IDLE = _FakeState("idle")
+
+
+class _FakePipelineStatus:
+    def __init__(self, state: _FakeState, start_time: datetime | None = None) -> None:
+        self.state = state
+        self.start_time = start_time or datetime.utcnow()
+
+
+class _FakeGStreamerManager:
+    def __init__(self) -> None:
+        self.statuses: dict[str, _FakePipelineStatus] = {}
+        self.stop_calls: list[dict] = []
+
+    def get_pipeline_status(self, name: str):
+        return self.statuses.get(name)
+
+    def create_pipeline(self, name, pipeline_description, on_eos, on_error, metadata):
+        self.statuses[name] = _FakePipelineStatus(_FakePipelineState.IDLE)
+        return True
+
+    def start_pipeline(self, name):
+        self.statuses[name] = _FakePipelineStatus(_FakePipelineState.RUNNING)
+        return True
+
+    def stop_pipeline(self, name, wait_for_eos=True, timeout=5.0):
+        self.stop_calls.append(
+            {
+                "name": name,
+                "wait_for_eos": wait_for_eos,
+                "timeout": timeout,
+            }
+        )
+        EVENT_LOG.append(f"stop:{name}:eos={wait_for_eos}")
+        self.statuses[name] = _FakePipelineStatus(_FakePipelineState.IDLE)
+        return True
+
+    def remove_pipeline(self, name):
+        self.statuses.pop(name, None)
+        return True
+
+
+class _FakeExposureService:
+    def __init__(self) -> None:
+        self.start_calls = 0
+        self.stop_calls = 0
+
+    def start(self):
+        self.start_calls += 1
+        EVENT_LOG.append("exposure:start")
+        return True
+
+    def stop(self):
+        self.stop_calls += 1
+        EVENT_LOG.append("exposure:stop")
+        return True
+
+
+def _load_preview_service_module():
+    gm_stub = types.ModuleType("gstreamer_manager")
+    gm_stub.GStreamerManager = _FakeGStreamerManager
+    gm_stub.PipelineState = _FakePipelineState
+    sys.modules["gstreamer_manager"] = gm_stub
+
+    pb_stub = types.ModuleType("pipeline_builders")
+    pb_stub.build_preview_pipeline = lambda camera_id, hls_location: f"pipeline-cam{camera_id}-{hls_location}"
+    sys.modules["pipeline_builders"] = pb_stub
+
+    exposure_stub = types.ModuleType("exposure_sync_service")
+    exposure_stub._svc = _FakeExposureService()
+
+    def _get_exposure_sync_service(_manager=None):
+        return exposure_stub._svc
+
+    exposure_stub.get_exposure_sync_service = _get_exposure_sync_service
+    sys.modules["exposure_sync_service"] = exposure_stub
+
+    module_name = f"preview_service_test_{time.time_ns()}"
+    module_path = Path(__file__).resolve().parents[1] / "src/video-pipeline/preview_service.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if not spec or not spec.loader:
+        raise RuntimeError("Could not load preview_service module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module, exposure_stub
+
+
+class TestPreviewService(unittest.TestCase):
+    def setUp(self) -> None:
+        EVENT_LOG.clear()
+        self.module, self.exposure_stub = _load_preview_service_module()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.hls_dir = Path(self.tmp.name) / "hls"
+        self.service = self.module.PreviewService(hls_base_dir=str(self.hls_dir))
+        self.service.gst_manager = _FakeGStreamerManager()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_start_preview_recreates_hls_directory(self) -> None:
+        shutil.rmtree(self.hls_dir, ignore_errors=True)
+        self.assertFalse(self.hls_dir.exists())
+
+        result = self.service.start_preview()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(self.hls_dir.exists())
+
+    def test_stop_preview_stops_exposure_before_pipeline_teardown(self) -> None:
+        start = self.service.start_preview()
+        self.assertTrue(start["success"])
+        EVENT_LOG.clear()
+
+        stop = self.service.stop_preview()
+
+        self.assertTrue(stop["success"])
+        stop_calls = self.service.gst_manager.stop_calls
+        self.assertGreaterEqual(len(stop_calls), 2)
+        self.assertTrue(all(call["wait_for_eos"] is False for call in stop_calls))
+        self.assertIn("exposure:stop", EVENT_LOG)
+        first_stop_index = next(i for i, entry in enumerate(EVENT_LOG) if entry.startswith("stop:"))
+        exposure_stop_index = EVENT_LOG.index("exposure:stop")
+        self.assertLess(exposure_stop_index, first_stop_index)
+
+    def test_stop_single_camera_does_not_stop_exposure_service(self) -> None:
+        start = self.service.start_preview()
+        self.assertTrue(start["success"])
+        EVENT_LOG.clear()
+
+        stop = self.service.stop_preview(camera_id=0)
+
+        self.assertTrue(stop["success"])
+        self.assertNotIn("exposure:stop", EVENT_LOG)
+        self.assertEqual(self.service.gst_manager.stop_calls[0]["name"], "preview_cam0")
+        self.assertFalse(self.service.gst_manager.stop_calls[0]["wait_for_eos"])
+
+
+if __name__ == "__main__":
+    unittest.main()
