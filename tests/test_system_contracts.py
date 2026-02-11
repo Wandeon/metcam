@@ -47,6 +47,11 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("replay[\"deduplicated\"] = True", source)
         self.assertIn("\"in_progress\": True", source)
 
+    def test_system_metrics_uses_psutil_for_cpu_usage(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        self.assertIn('psutil.cpu_percent(interval=0.1)', source)
+        self.assertNotIn('subprocess.run(["top", "-bn", "1"]', source)
+
     def test_ws_proxy_config_present(self) -> None:
         caddy_source = (ROOT / "deploy/config/Caddyfile").read_text(encoding="utf-8")
         vite_source = (ROOT / "src/platform/web-dashboard/vite.config.ts").read_text(encoding="utf-8")
@@ -64,4 +69,3 @@ class TestSystemContracts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
