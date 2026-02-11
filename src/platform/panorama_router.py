@@ -50,6 +50,11 @@ class CalibrationStartRequest(BaseModel):
     frame_count: Optional[int] = 15  # Target number of frame pairs
 
 
+class PanoramaPreviewStartRequest(BaseModel):
+    """Request model for panorama preview start."""
+    transport: Optional[str] = None  # hls | webrtc (optional)
+
+
 # ============================================================================
 # Status & Configuration Endpoints
 # ============================================================================
@@ -313,7 +318,7 @@ async def clear_calibration():
 # ============================================================================
 
 @router.post("/preview/start")
-async def start_preview():
+async def start_preview(request: Optional[PanoramaPreviewStartRequest] = None):
     """
     Start panorama preview
 
@@ -325,7 +330,8 @@ async def start_preview():
     Returns 503 if not calibrated.
     """
     try:
-        result = panorama_service.start_preview()
+        transport = request.transport if request else None
+        result = panorama_service.start_preview(transport=transport)
 
         if result.get('success'):
             return result

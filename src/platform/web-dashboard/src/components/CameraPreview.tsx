@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { Video, AlertCircle, Maximize2, ZoomIn, ZoomOut, RotateCcw, X, ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { webRtcService, type StreamKind } from '@/services/webrtc';
 
 interface CameraPreviewProps {
   cameraId: number;
@@ -8,6 +9,9 @@ interface CameraPreviewProps {
   title: string;
   resolution?: string;
   framerate?: number;
+  transport?: 'hls' | 'webrtc';
+  streamKind?: StreamKind;
+  iceServers?: RTCIceServer[];
 }
 
 export const CameraPreview: React.FC<CameraPreviewProps> = ({
@@ -15,6 +19,9 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
   title,
   resolution = '1920x1080',
   framerate = 30,
+  transport = 'hls',
+  streamKind,
+  iceServers,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,6 +38,28 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
 
     setLoading(true);
     setError(null);
+
+    if (transport === 'webrtc') {
+      if (!streamKind) {
+        setError('Missing stream configuration');
+        setLoading(false);
+        return;
+      }
+
+      webRtcService.startStream(streamKind, video, iceServers)
+        .then(() => {
+          setLoading(false);
+        })
+        .catch((err) => {
+          console.error('WebRTC start failed:', err);
+          setError(err?.message || 'Failed to start WebRTC stream');
+          setLoading(false);
+        });
+
+      return () => {
+        webRtcService.stopStream(streamKind);
+      };
+    }
 
     console.log('Loading HLS stream:', streamUrl);
 
@@ -100,7 +129,7 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
         hlsRef.current = null;
       }
     };
-  }, [streamUrl]);
+  }, [iceServers, streamKind, streamUrl, transport]);
 
   // Fullscreen handlers
   const enterFullscreen = () => {

@@ -8,6 +8,7 @@ import asyncio
 import json
 import time
 import logging
+import inspect
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
@@ -54,6 +55,7 @@ class ConnectionManager:
         self._channel_running: dict[str, bool] = {ch: False for ch in ALL_CHANNELS}
         self._data_sources: dict[str, Callable] = {}
         self._command_handler: Optional[Callable] = None
+        self._custom_handlers: dict[str, Callable] = {}
         self._recent_commands: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ws_executor")
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -66,6 +68,32 @@ class ConnectionManager:
         """Register sync getter functions and command handler from app layer."""
         self._data_sources = sources
         self._command_handler = command_handler
+
+    def register_message_handler(self, msg_type: str, handler: Callable) -> None:
+        """Register custom WS message handler."""
+        self._custom_handlers[msg_type] = handler
+
+    def unregister_message_handler(self, msg_type: str) -> None:
+        self._custom_handlers.pop(msg_type, None)
+
+    def get_connection_id(self, websocket: WebSocket) -> str:
+        return str(id(websocket))
+
+    async def send_to_connection(self, connection_id: str, message: dict) -> bool:
+        for ws in list(self._connections.keys()):
+            if self.get_connection_id(ws) == connection_id:
+                await self._send(ws, message)
+                return True
+        return False
+
+    def schedule_send_to_connection(self, connection_id: str, message: dict) -> None:
+        """Thread-safe async send helper for non-async callbacks."""
+        if self._loop is None or not self._loop.is_running():
+            return
+        asyncio.run_coroutine_threadsafe(
+            self.send_to_connection(connection_id, message),
+            self._loop,
+        )
 
     async def connect(self, websocket: WebSocket) -> None:
         if len(self._connections) >= MAX_CONNECTIONS:
@@ -139,6 +167,23 @@ class ConnectionManager:
 
         elif msg_type == "command":
             await self._handle_command(websocket, msg)
+
+        elif msg_type in self._custom_handlers:
+            handler = self._custom_handlers[msg_type]
+            try:
+                result = handler(websocket, msg)
+                if inspect.isawaitable(result):
+                    result = await result
+                if result is None:
+                    return
+                if isinstance(result, list):
+                    for item in result:
+                        await self._send(websocket, item)
+                elif isinstance(result, dict):
+                    await self._send(websocket, result)
+            except Exception as e:
+                logger.error(f"Custom handler failed for '{msg_type}': {e}")
+                await self._send_error(websocket, "handler_error", str(e))
 
         else:
             await self._send_error(websocket, "unknown_type", f"Unknown message type: {msg_type}")

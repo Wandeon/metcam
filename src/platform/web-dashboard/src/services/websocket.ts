@@ -11,6 +11,7 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
 type MessageHandler = (data: any) => void;
+type TypedMessageHandler = (message: any) => void;
 type ConnectionHandler = (connected: boolean) => void;
 
 interface PendingCommand {
@@ -30,6 +31,7 @@ class WebSocketManager {
   private intentionalClose = false;
 
   private channelHandlers = new Map<string, Set<MessageHandler>>();
+  private typedMessageHandlers = new Map<string, Set<TypedMessageHandler>>();
   private connectionHandlers = new Set<ConnectionHandler>();
   private pendingCommands = new Map<string, PendingCommand>();
   private commandCounter = 0;
@@ -122,6 +124,33 @@ class WebSocketManager {
     });
   }
 
+  sendMessage(type: string, data: Record<string, any> = {}): void {
+    if (!this.ready) {
+      throw new Error('WebSocket not connected');
+    }
+
+    this.send({
+      v: PROTOCOL_VERSION,
+      type,
+      data,
+    });
+  }
+
+  onMessageType(type: string, handler: TypedMessageHandler): () => void {
+    if (!this.typedMessageHandlers.has(type)) {
+      this.typedMessageHandlers.set(type, new Set());
+    }
+    this.typedMessageHandlers.get(type)!.add(handler);
+    return () => {
+      const handlers = this.typedMessageHandlers.get(type);
+      if (!handlers) return;
+      handlers.delete(handler);
+      if (handlers.size === 0) {
+        this.typedMessageHandlers.delete(type);
+      }
+    };
+  }
+
   onConnectionChange(handler: ConnectionHandler): () => void {
     this.connectionHandlers.add(handler);
     // Immediately notify current state
@@ -200,6 +229,17 @@ class WebSocketManager {
           handler(msg.data);
         } catch (e) {
           console.error(`[WS] Handler error for ${type}:`, e);
+        }
+      }
+    }
+
+    const typedHandlers = this.typedMessageHandlers.get(type);
+    if (typedHandlers) {
+      for (const handler of typedHandlers) {
+        try {
+          handler(msg);
+        } catch (e) {
+          console.error(`[WS] Typed handler error for ${type}:`, e);
         }
       }
     }

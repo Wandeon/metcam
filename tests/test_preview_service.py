@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import shutil
 import sys
 import tempfile
@@ -113,6 +114,8 @@ def _load_preview_service_module():
 class TestPreviewService(unittest.TestCase):
     def setUp(self) -> None:
         EVENT_LOG.clear()
+        self.prev_transport_mode = os.environ.get("PREVIEW_TRANSPORT_MODE")
+        os.environ["PREVIEW_TRANSPORT_MODE"] = "hls"
         self.module, self.exposure_stub = _load_preview_service_module()
         self.tmp = tempfile.TemporaryDirectory()
         self.hls_dir = Path(self.tmp.name) / "hls"
@@ -120,6 +123,10 @@ class TestPreviewService(unittest.TestCase):
         self.service.gst_manager = _FakeGStreamerManager()
 
     def tearDown(self) -> None:
+        if self.prev_transport_mode is None:
+            os.environ.pop("PREVIEW_TRANSPORT_MODE", None)
+        else:
+            os.environ["PREVIEW_TRANSPORT_MODE"] = self.prev_transport_mode
         self.tmp.cleanup()
 
     def test_start_preview_recreates_hls_directory(self) -> None:

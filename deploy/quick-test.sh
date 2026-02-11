@@ -16,6 +16,7 @@ log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
 API_URL="http://localhost:8000/api/v1"
+PREVIEW_TRANSPORT="${PREVIEW_TRANSPORT:-hls}" # hls | webrtc
 
 cleanup() {
     curl -s -X DELETE "$API_URL/preview" >/dev/null 2>&1 || true
@@ -87,24 +88,28 @@ if [ "$CURRENT_MODE" != "idle" ]; then
 fi
 
 log_info "Test 2: Preview start/stop"
-PREVIEW_START=$(curl -s -X POST "$API_URL/preview" -H "Content-Type: application/json" -d '{}')
+PREVIEW_START=$(curl -s -X POST "$API_URL/preview" -H "Content-Type: application/json" -d "{\"transport\":\"$PREVIEW_TRANSPORT\"}")
 if [ "$(echo "$PREVIEW_START" | json_get_bool "success")" = "true" ]; then
-    log_success "Preview started"
+    log_success "Preview started (transport=$PREVIEW_TRANSPORT)"
 else
     log_error "Preview start failed: $PREVIEW_START"
 fi
 
-log_info "Waiting for HLS artifacts (up to 20s)"
-for _ in $(seq 1 20); do
+if [ "$PREVIEW_TRANSPORT" = "hls" ]; then
+    log_info "Waiting for HLS artifacts (up to 20s)"
+    for _ in $(seq 1 20); do
+        if [ -f /dev/shm/hls/cam0.m3u8 ] && [ -f /dev/shm/hls/cam1.m3u8 ]; then
+            break
+        fi
+        sleep 1
+    done
     if [ -f /dev/shm/hls/cam0.m3u8 ] && [ -f /dev/shm/hls/cam1.m3u8 ]; then
-        break
+        log_success "HLS playlists generated"
+    else
+        log_error "Missing HLS playlists in /dev/shm/hls/"
     fi
-    sleep 1
-done
-if [ -f /dev/shm/hls/cam0.m3u8 ] && [ -f /dev/shm/hls/cam1.m3u8 ]; then
-    log_success "HLS playlists generated"
 else
-    log_error "Missing HLS playlists in /dev/shm/hls/"
+    log_info "Skipping HLS artifact check for transport=$PREVIEW_TRANSPORT"
 fi
 
 PREVIEW_STATUS=$(curl -s "$API_URL/preview")
@@ -195,7 +200,7 @@ fi
 sleep 2
 
 PREVIEW_BODY_FILE=$(mktemp)
-PREVIEW_HTTP=$(curl -s -o "$PREVIEW_BODY_FILE" -w "%{http_code}" -X POST "$API_URL/preview" -H "Content-Type: application/json" -d '{}')
+PREVIEW_HTTP=$(curl -s -o "$PREVIEW_BODY_FILE" -w "%{http_code}" -X POST "$API_URL/preview" -H "Content-Type: application/json" -d "{\"transport\":\"$PREVIEW_TRANSPORT\"}")
 PREVIEW_BODY=$(cat "$PREVIEW_BODY_FILE")
 rm -f "$PREVIEW_BODY_FILE"
 

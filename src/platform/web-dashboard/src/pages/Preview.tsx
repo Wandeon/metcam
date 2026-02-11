@@ -13,6 +13,11 @@ function transformPreviewStatus(raw: StatusResponseV3): PreviewStatus {
     cam1_running: preview.cameras.camera_1.active,
     cam0_url: preview.cameras.camera_0.hls_url,
     cam1_url: preview.cameras.camera_1.hls_url,
+    cam0_transport: preview.cameras.camera_0.transport || 'hls',
+    cam1_transport: preview.cameras.camera_1.transport || 'hls',
+    cam0_stream_kind: preview.cameras.camera_0.stream_kind || 'main_cam0',
+    cam1_stream_kind: preview.cameras.camera_1.stream_kind || 'main_cam1',
+    ice_servers: preview.ice_servers || [],
   };
 }
 
@@ -69,12 +74,12 @@ export const Preview: React.FC = () => {
         if (status.recording) {
           throw new Error('Cannot start preview while recording is active. Please stop recording first.');
         }
-        await apiService.startPreview({ mode: 'normal' });
+        await apiService.startPreview({ mode: 'normal', transport: 'webrtc' });
       };
 
       if (wsConnected) {
         try {
-          await sendCommand('start_preview');
+          await sendCommand('start_preview', { transport: 'webrtc' });
         } catch (err) {
           if (isWsTransportError(err)) {
             await startPreviewViaRest();
@@ -85,8 +90,7 @@ export const Preview: React.FC = () => {
       } else {
         await startPreviewViaRest();
       }
-      // Wait for HLS files to be ready before showing players
-      await new Promise(resolve => setTimeout(resolve, 6000));
+      await new Promise(resolve => setTimeout(resolve, 500));
     } catch (err: any) {
       setError(err.message || 'Failed to start preview');
       setTimeout(() => setError(null), 5000);
@@ -104,12 +108,12 @@ export const Preview: React.FC = () => {
         if (status.recording) {
           throw new Error('Cannot start calibration while recording is active. Please stop recording first.');
         }
-        await apiService.startPreview({ mode: 'calibration' });
+        await apiService.startPreview({ mode: 'calibration', transport: 'webrtc' });
       };
 
       if (wsConnected) {
         try {
-          await sendCommand('start_preview');
+          await sendCommand('start_preview', { transport: 'webrtc' });
         } catch (err) {
           if (isWsTransportError(err)) {
             await startCalibrationViaRest();
@@ -120,7 +124,7 @@ export const Preview: React.FC = () => {
       } else {
         await startCalibrationViaRest();
       }
-      await new Promise(resolve => setTimeout(resolve, 6000));
+      await new Promise(resolve => setTimeout(resolve, 500));
     } catch (err: any) {
       setError(err.message || 'Failed to start calibration');
       setTimeout(() => setError(null), 5000);
@@ -271,6 +275,9 @@ export const Preview: React.FC = () => {
             title="Camera 0"
             resolution={(previewStatus as any).output_resolution || '1920x1080'}
             framerate={(previewStatus as any).framerate || 30}
+            transport={previewStatus.cam0_transport}
+            streamKind={previewStatus.cam0_stream_kind}
+            iceServers={previewStatus.ice_servers?.map((s) => ({ urls: s.urls }))}
           />
           <CameraPreview
             key={`cam1-${streamKey}`}
@@ -279,6 +286,9 @@ export const Preview: React.FC = () => {
             title="Camera 1"
             resolution={(previewStatus as any).output_resolution || '1920x1080'}
             framerate={(previewStatus as any).framerate || 30}
+            transport={previewStatus.cam1_transport}
+            streamKind={previewStatus.cam1_stream_kind}
+            iceServers={previewStatus.ice_servers?.map((s) => ({ urls: s.urls }))}
           />
         </div>
       )}

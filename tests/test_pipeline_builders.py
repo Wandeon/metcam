@@ -113,6 +113,32 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("playlist-location=/dev/shm/hls/cam1.m3u8", pipeline)
         self.assertIn("location=/dev/shm/hls/cam1_%05d.ts", pipeline)
 
+    def test_build_preview_webrtc_pipeline_contains_webrtcbin(self) -> None:
+        pipeline = self.module.build_preview_webrtc_pipeline(
+            camera_id=0,
+            stun_server="stun://stun.example.org:3478",
+            turn_server="turn://user:pass@turn.example.org:3478",
+            config_path=str(self.config_path),
+        )
+        self.assertIn("webrtcbin", pipeline)
+        self.assertIn("stun-server=stun://stun.example.org:3478", pipeline)
+        self.assertIn("turn-server=turn://user:pass@turn.example.org:3478", pipeline)
+        self.assertIn("rtph264pay", pipeline)
+
+    def test_build_panorama_output_webrtc_pipeline_contains_webrtcbin(self) -> None:
+        pipeline = self.module.build_panorama_output_webrtc_pipeline(
+            width=1920,
+            height=1080,
+            fps=24,
+            stun_server="stun://stun.example.org:3478",
+            turn_server="turn://user:pass@turn.example.org:3478",
+        )
+        self.assertIn("appsrc name=panorama_source", pipeline)
+        self.assertIn("width=1920,height=1080,framerate=24/1", pipeline)
+        self.assertIn("webrtcbin", pipeline)
+        self.assertIn("stun-server=stun://stun.example.org:3478", pipeline)
+        self.assertIn("turn-server=turn://user:pass@turn.example.org:3478", pipeline)
+
     def test_build_panorama_capture_pipeline_contains_appsink_branch(self) -> None:
         pipeline = self.module.build_panorama_capture_pipeline(camera_id=0, config_path=str(self.config_path))
         self.assertIn("tee name=t", pipeline)

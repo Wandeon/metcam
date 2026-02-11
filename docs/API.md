@@ -46,18 +46,25 @@ Example response:
   },
   "preview": {
     "preview_active": false,
+    "transport_mode": "dual",
+    "webrtc_supported": true,
+    "ice_servers": [{"urls": ["stun://stun.l.google.com:19302"]}],
     "cameras": {
       "camera_0": {
         "active": false,
         "state": "stopped",
         "uptime": 0.0,
-        "hls_url": "/hls/cam0.m3u8"
+        "hls_url": "/hls/cam0.m3u8",
+        "transport": "hls",
+        "stream_kind": "main_cam0"
       },
       "camera_1": {
         "active": false,
         "state": "stopped",
         "uptime": 0.0,
-        "hls_url": "/hls/cam1.m3u8"
+        "hls_url": "/hls/cam1.m3u8",
+        "transport": "hls",
+        "stream_kind": "main_cam1"
       }
     }
   }
@@ -168,12 +175,14 @@ Starts preview for one or both cameras.
 Request body:
 ```json
 {
-  "camera_id": null
+  "camera_id": null,
+  "transport": "webrtc"
 }
 ```
 
 - `camera_id=null` means both cameras.
 - `camera_id=0` or `1` targets a single camera.
+- `transport` optional: `hls` or `webrtc`.
 
 #### `DELETE /api/v1/preview?camera_id=0`
 Stops preview for one camera or all cameras.
@@ -323,6 +332,20 @@ Server sends on connect:
 - `get_recordings`
 - `get_logs`
 - `get_panorama_processing`
+
+### WebRTC Signaling Messages (over `/ws`)
+Client -> Server:
+- `webrtc_start` with `{stream_kind}`
+- `webrtc_offer` with `{session_id, stream_kind, sdp}`
+- `webrtc_ice_candidate` with `{session_id, stream_kind, candidate, sdpMLineIndex}`
+- `webrtc_stop` with `{session_id, stream_kind}`
+
+Server -> Client:
+- `webrtc_session_ready`
+- `webrtc_answer`
+- `webrtc_ice_candidate`
+- `webrtc_state`
+- `webrtc_error`
 
 ### Command Idempotency
 - Recent command IDs are deduplicated.

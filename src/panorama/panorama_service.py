@@ -25,16 +25,17 @@ import time
 import json
 import logging
 import threading
+import uuid
 import numpy as np
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any, Callable
 from datetime import datetime
 from threading import Lock
 
 # Add video-pipeline to path for GStreamer imports
 sys.path.insert(0, '/home/mislav/footballvision-pro/src/video-pipeline')
 from gstreamer_manager import GStreamerManager
-from pipeline_builders import build_panorama_capture_pipeline
+from pipeline_builders import build_panorama_capture_pipeline, build_panorama_output_webrtc_pipeline
 
 # Import GStreamer and frame utilities
 import gi
@@ -96,6 +97,9 @@ class PanoramaService:
         # State
         self.preview_active = False
         self.preview_start_time: Optional[float] = None
+        self.preview_transport = os.getenv("PANORAMA_PREVIEW_TRANSPORT_MODE", os.getenv("PREVIEW_TRANSPORT_MODE", "hls")).strip().lower()
+        if self.preview_transport not in {"hls", "webrtc", "dual"}:
+            self.preview_transport = "hls"
         self.state_lock = Lock()
 
         # State persistence
@@ -123,6 +127,11 @@ class PanoramaService:
         self.gst_manager = GStreamerManager()
         self.capture_pipelines = {}  # {camera_id: pipeline_name}
         self.output_pipeline = None
+        self.webrtc_session: Optional[Dict[str, Any]] = None
+        self.webrtc_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        self.webrtc_callbacks_registered = False
+        self.stun_server = os.getenv("WEBRTC_STUN_SERVER", "stun://stun.l.google.com:19302").strip()
+        self.turn_server = os.getenv("WEBRTC_TURN_SERVER", "").strip() or None
 
         # Post-processing state tracking
         self.processing_state = {}  # {match_id: {processing, progress, completed, error, eta_seconds}}
@@ -243,7 +252,24 @@ class PanoramaService:
             logger.error(f"Failed to load stitcher: {e}", exc_info=True)
             return False
 
-    def start_preview(self) -> Dict:
+    def _resolve_transport(self, requested_transport: Optional[str]) -> str:
+        requested = (requested_transport or "").strip().lower()
+        if requested in {"hls", "webrtc"}:
+            return requested
+        if self.preview_transport == "webrtc":
+            return "webrtc"
+        # dual defaults to hls for conservative rollout unless caller opts in.
+        return "hls"
+
+    def _ice_servers(self) -> List[Dict[str, Any]]:
+        servers: List[Dict[str, Any]] = []
+        if self.stun_server:
+            servers.append({"urls": [self.stun_server]})
+        if self.turn_server:
+            servers.append({"urls": [self.turn_server]})
+        return servers
+
+    def start_preview(self, transport: Optional[str] = None) -> Dict:
         """
         Start panorama preview stream
 
@@ -251,6 +277,8 @@ class PanoramaService:
             Dict with success status and HLS URL
         """
         with self.state_lock:
+            resolved_transport = self._resolve_transport(transport)
+
             # Check if already running
             if self.preview_active:
                 return {
@@ -326,15 +354,17 @@ class PanoramaService:
                     self.capture_pipelines[cam_id] = pipeline_name
                     logger.info(f"Started capture pipeline for cam{cam_id}")
 
-                # 2. Create output pipeline (appsrc -> encoder -> hlssink2)
+                # 2. Create output pipeline
                 logger.info("Creating output pipeline for stitched panorama")
-                output_pipeline_str = self._build_output_pipeline()
+                output_pipeline_str = self._build_output_pipeline(resolved_transport)
                 created = self.gst_manager.create_pipeline(
                     name='panorama_output',
                     pipeline_description=output_pipeline_str,
                     on_eos=self._on_output_eos,
                     on_error=self._on_output_error,
-                    metadata={}
+                    metadata={
+                        "transport": resolved_transport,
+                    }
                 )
 
                 if not created:
@@ -359,6 +389,7 @@ class PanoramaService:
                 # 4. Update state
                 self.preview_active = True
                 self.preview_start_time = time.time()
+                self.preview_transport = resolved_transport
                 self._save_state()
 
                 logger.info("Panorama preview started successfully")
@@ -366,7 +397,10 @@ class PanoramaService:
                 return {
                     'success': True,
                     'message': 'Panorama preview started',
+                    'transport': resolved_transport,
+                    'stream_kind': 'panorama',
                     'hls_url': '/hls/panorama.m3u8',
+                    'ice_servers': self._ice_servers(),
                     'resolution': f"{self.config_manager.config['output']['width']}x{self.config_manager.config['output']['height']}",
                     'fps_target': self.config_manager.config['performance']['preview_fps_target']
                 }
@@ -437,6 +471,8 @@ class PanoramaService:
                 # 6. Update state
                 self.preview_active = False
                 self.preview_start_time = None
+                self.webrtc_session = None
+                self.webrtc_callbacks_registered = False
                 self._save_state()
 
                 logger.info("Panorama preview stopped successfully")
@@ -515,6 +551,10 @@ class PanoramaService:
 
             return {
                 'preview_active': self.preview_active,
+                'transport': self.preview_transport if self.preview_active else self._resolve_transport(None),
+                'stream_kind': 'panorama',
+                'hls_url': '/hls/panorama.m3u8',
+                'ice_servers': self._ice_servers(),
                 'uptime_seconds': uptime,
                 'calibrated': self._is_calibrated(),
                 'calibration_info': calibration_info,
@@ -977,9 +1017,198 @@ class PanoramaService:
                 'message': f'Error completing calibration: {str(e)}'
             }
 
-    def _build_output_pipeline(self) -> str:
+    def set_webrtc_emitter(self, emitter: Callable[[str, Dict[str, Any]], None]) -> None:
+        self.webrtc_emitter = emitter
+
+    def _emit_webrtc(self, connection_id: str, message: Dict[str, Any]) -> None:
+        if self.webrtc_emitter is None:
+            return
+        try:
+            self.webrtc_emitter(connection_id, message)
+        except Exception as e:
+            logger.error(f"Failed to emit panorama WebRTC message: {e}")
+
+    def _get_webrtcbin(self):
+        if not self.output_pipeline:
+            return None
+        with self.gst_manager.pipelines_lock:
+            entry = self.gst_manager.pipelines.get(self.output_pipeline)
+            if not entry:
+                return None
+            pipeline = entry.get("pipeline")
+            if pipeline is None:
+                return None
+            return pipeline.get_by_name("webrtc")
+
+    def _register_webrtc_callbacks(self) -> None:
+        if self.webrtc_callbacks_registered:
+            return
+        webrtcbin = self._get_webrtcbin()
+        if webrtcbin is None:
+            raise RuntimeError("webrtcbin not found in panorama output pipeline")
+
+        def on_ice_candidate(_element, mlineindex, candidate):
+            session = self.webrtc_session
+            if not session:
+                return
+            self._emit_webrtc(
+                session["connection_id"],
+                {
+                    "v": 1,
+                    "type": "webrtc_ice_candidate",
+                    "data": {
+                        "session_id": session["session_id"],
+                        "stream_kind": "panorama",
+                        "candidate": candidate,
+                        "sdpMLineIndex": mlineindex,
+                    },
+                },
+            )
+
+        webrtcbin.connect("on-ice-candidate", on_ice_candidate)
+        self.webrtc_callbacks_registered = True
+
+    def create_webrtc_session(self, connection_id: str) -> Dict[str, Any]:
+        should_start_preview = False
+        with self.state_lock:
+            if self.webrtc_session and self.webrtc_session.get("active"):
+                if self.webrtc_session.get("connection_id") == connection_id:
+                    return {
+                        "success": True,
+                        "session_id": self.webrtc_session["session_id"],
+                        "stream_kind": "panorama",
+                        "ice_servers": self._ice_servers(),
+                    }
+                return {
+                    "success": False,
+                    "message": "Panorama WebRTC already in use by another connection",
+                }
+
+            should_start_preview = not self.preview_active or self.preview_transport != "webrtc"
+
+        if should_start_preview:
+            start = self.start_preview(transport="webrtc")
+            if not start.get("success"):
+                return {"success": False, "message": start.get("message", "Failed to start panorama preview")}
+
+        with self.state_lock:
+            self._register_webrtc_callbacks()
+
+            session_id = str(uuid.uuid4())
+            self.webrtc_session = {
+                "session_id": session_id,
+                "connection_id": connection_id,
+                "active": True,
+                "created_at": time.time(),
+            }
+            return {
+                "success": True,
+                "session_id": session_id,
+                "stream_kind": "panorama",
+                "ice_servers": self._ice_servers(),
+            }
+
+    def _parse_offer(self, sdp_offer: str):
+        gi.require_version("GstWebRTC", "1.0")
+        gi.require_version("GstSdp", "1.0")
+        from gi.repository import GstWebRTC, GstSdp
+
+        _, sdpmsg = GstSdp.SDPMessage.new()
+        GstSdp.sdp_message_parse_buffer(bytes(sdp_offer.encode("utf-8")), sdpmsg)
+        return GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.OFFER, sdpmsg)
+
+    def handle_webrtc_offer(self, connection_id: str, session_id: str, sdp_offer: str) -> Dict[str, Any]:
+        with self.state_lock:
+            session = self.webrtc_session
+            if not session or session.get("session_id") != session_id:
+                return {"success": False, "message": "Unknown session_id"}
+            if session.get("connection_id") != connection_id:
+                return {"success": False, "message": "Session does not belong to this connection"}
+
+            webrtcbin = self._get_webrtcbin()
+            if webrtcbin is None:
+                return {"success": False, "message": "webrtcbin not found"}
+
+            try:
+                offer = self._parse_offer(sdp_offer)
+
+                set_remote = Gst.Promise.new()
+                webrtcbin.emit("set-remote-description", offer, set_remote)
+                set_remote.interrupt()
+
+                create_answer = Gst.Promise.new()
+                webrtcbin.emit("create-answer", None, create_answer)
+                create_answer.wait()
+                reply = create_answer.get_reply()
+                answer = reply.get_value("answer")
+
+                set_local = Gst.Promise.new()
+                webrtcbin.emit("set-local-description", answer, set_local)
+                set_local.interrupt()
+
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "stream_kind": "panorama",
+                    "sdp": answer.sdp.as_text(),
+                }
+            except Exception as e:
+                logger.error(f"Failed handling panorama WebRTC offer: {e}")
+                return {"success": False, "message": str(e)}
+
+    def add_webrtc_ice_candidate(
+        self,
+        connection_id: str,
+        session_id: str,
+        candidate: str,
+        sdp_mline_index: int,
+    ) -> Dict[str, Any]:
+        with self.state_lock:
+            session = self.webrtc_session
+            if not session or session.get("session_id") != session_id:
+                return {"success": False, "message": "Unknown session_id"}
+            if session.get("connection_id") != connection_id:
+                return {"success": False, "message": "Session does not belong to this connection"}
+
+            webrtcbin = self._get_webrtcbin()
+            if webrtcbin is None:
+                return {"success": False, "message": "webrtcbin not found"}
+
+            try:
+                webrtcbin.emit("add-ice-candidate", int(sdp_mline_index), candidate)
+                return {"success": True}
+            except Exception as e:
+                logger.error(f"Failed adding panorama ICE candidate: {e}")
+                return {"success": False, "message": str(e)}
+
+    def stop_webrtc_session(self, connection_id: str, session_id: str) -> Dict[str, Any]:
+        should_stop_preview = False
+        with self.state_lock:
+            session = self.webrtc_session
+            if not session or session.get("session_id") != session_id:
+                return {"success": False, "message": "Unknown session_id"}
+            if session.get("connection_id") != connection_id:
+                return {"success": False, "message": "Session does not belong to this connection"}
+
+            self.webrtc_session = None
+            # Panorama preview is single-stream; stop it when session ends.
+            should_stop_preview = True
+        if should_stop_preview:
+            self.stop_preview()
+        return {"success": True}
+
+    def clear_connection_sessions(self, connection_id: str) -> None:
+        should_stop_preview = False
+        with self.state_lock:
+            if self.webrtc_session and self.webrtc_session.get("connection_id") == connection_id:
+                self.webrtc_session = None
+                should_stop_preview = True
+        if should_stop_preview:
+            self.stop_preview()
+
+    def _build_output_pipeline(self, transport: str = "hls") -> str:
         """
-        Build appsrc -> encoder -> hlssink2 pipeline for panorama output
+        Build panorama output pipeline.
 
         Returns:
             GStreamer pipeline string
@@ -988,6 +1217,17 @@ class PanoramaService:
         width = output_config['width']
         height = output_config['height']
         fps = self.config_manager.config['performance']['preview_fps_target']
+
+        if transport == "webrtc":
+            pipeline = build_panorama_output_webrtc_pipeline(
+                width=width,
+                height=height,
+                fps=fps,
+                stun_server=self.stun_server,
+                turn_server=self.turn_server,
+            )
+            logger.debug("Built panorama WebRTC output pipeline: %sx%s@%sfps", width, height, fps)
+            return pipeline
 
         hls_location = "/dev/shm/hls/panorama.m3u8"
 
@@ -1018,7 +1258,7 @@ class PanoramaService:
             "send-keyframe-requests=true"
         )
 
-        logger.debug(f"Built output pipeline: {width}x{height}@{fps}fps")
+        logger.debug(f"Built HLS output pipeline: {width}x{height}@{fps}fps")
         return pipeline
 
     def _on_new_frame(self, sink, camera_id: int):
@@ -1394,6 +1634,8 @@ class PanoramaService:
             # Update state
             self.preview_active = False
             self.preview_start_time = None
+            self.webrtc_session = None
+            self.webrtc_callbacks_registered = False
 
         except Exception as e:
             logger.error(f"Error during preview cleanup: {e}", exc_info=True)
