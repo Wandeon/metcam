@@ -236,7 +236,7 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             f"b-adapt={preset['b_adapt']} bframes={preset['bframes']} ",
             f"aud=true byte-stream=false option-string={preset['options']} ! ",
             "queue name=postenc_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
-            "h264parse config-interval=-1 disable-passthrough=true ! ",
+            "h264parse config-interval=-1 ! ",
             "video/x-h264,stream-format=avc ! ",
             "queue name=mux_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
             "splitmuxsink name=sink ",
