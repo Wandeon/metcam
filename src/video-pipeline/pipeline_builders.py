@@ -175,12 +175,9 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
         quality_preset: Recording quality preset - "high" (default), "balanced", or "fast"
 
     Quality Presets:
-        high: Best quality for archival (veryfast preset, bframes=3, 25Mbps, tune=film)
-              ~25-40% better quality, +15-20% CPU usage
-        balanced: Good quality with moderate CPU (fast preset, bframes=2, 22Mbps, tune=film)
-              ~15-25% better quality, +10-15% CPU usage
-        fast: Original settings for maximum compatibility (ultrafast, no bframes, 20Mbps)
-              Lowest CPU, fastest encoding
+        high: Archival profile (veryfast, bframes=2, lookahead=20, 25Mbps)
+        balanced: Mid profile (superfast, bframes=1, lookahead=10, 22Mbps)
+        fast: Stability-first profile (ultrafast, no bframes/lookahead, 20Mbps)
     """
 
     config = load_camera_config(config_path)
@@ -196,29 +193,29 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             "psy_tune": "film",
             "bitrate": 25000,
             "key_int_max": 90,
-            "bframes": 3,
+            "bframes": 2,
             "b_adapt": "true",
-            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=3:rc-lookahead=30:qpmin=18:qpmax=32:vbv-maxrate=25000:vbv-bufsize=50000"
+            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=3:rc-lookahead=20:qpmin=18:qpmax=32:vbv-maxrate=25000:vbv-bufsize=50000"
         },
         "balanced": {
-            "speed_preset": "fast",
+            "speed_preset": "superfast",
             "tune": 0x00000000,  # No tune flags
             "psy_tune": "film",
             "bitrate": 22000,
-            "key_int_max": 75,
-            "bframes": 2,
+            "key_int_max": 90,
+            "bframes": 1,
             "b_adapt": "true",
-            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=2:rc-lookahead=20:qpmin=18:qpmax=32:vbv-maxrate=22000:vbv-bufsize=44000"
+            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=2:rc-lookahead=10:qpmin=18:qpmax=32:vbv-maxrate=22000:vbv-bufsize=44000"
         },
         "fast": {
             "speed_preset": "ultrafast",
-            "tune": 0x00000000,  # No tune flags (removed zerolatency to allow bframes)
+            "tune": 0x00000000,  # No tune flags
             "psy_tune": "none",
             "bitrate": 20000,
             "key_int_max": 90,
-            "bframes": 3,
-            "b_adapt": "true",
-            "options": "repeat-headers=1:scenecut=0:open-gop=0:vbv-maxrate=20000:vbv-bufsize=40000"
+            "bframes": 0,
+            "b_adapt": "false",
+            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=1:rc-lookahead=0:qpmin=18:qpmax=34:vbv-maxrate=20000:vbv-bufsize=40000"
         }
     }
 
