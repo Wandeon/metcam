@@ -13,7 +13,6 @@ from typing import Optional
 from collections import defaultdict
 from datetime import datetime
 import re
-import subprocess
 import sys
 import os
 import psutil
@@ -549,21 +548,7 @@ def _collect_system_metrics() -> dict:
 
     # CPU usage
     try:
-        env = os.environ.copy()
-        env["LC_NUMERIC"] = "C"
-        result = subprocess.run(["top", "-bn", "1"], capture_output=True, text=True, env=env)
-        for line in result.stdout.split("\n"):
-            if "Cpu(s)" in line or "%Cpu" in line:
-                parts = line.split(",")
-                for part in parts:
-                    if " id" in part:
-                        idle = float(part.split()[0])
-                        used = 100 - idle
-                        metrics["cpu_usage"] = {"overall": round(used, 1)}
-                        break
-                break
-        if "cpu_usage" not in metrics:
-            metrics["cpu_usage"] = {"overall": 0}
+        metrics["cpu_usage"] = {"overall": round(psutil.cpu_percent(interval=0.1), 1)}
     except Exception as e:
         logger.warning(f"Failed to get CPU usage: {e}")
         metrics["cpu_usage"] = {"overall": 0}
