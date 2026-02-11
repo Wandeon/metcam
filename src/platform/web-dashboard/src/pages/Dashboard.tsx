@@ -21,6 +21,12 @@ async function fetchStatusRaw(): Promise<StatusResponseV3> {
   return response.json();
 }
 
+function isWsTransportError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  const normalized = message.toLowerCase();
+  return normalized.includes('websocket not connected') || normalized.includes('websocket disconnected');
+}
+
 export const Dashboard: React.FC = () => {
   const [status, setStatus] = useState<RecordingStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,13 +72,7 @@ export const Dashboard: React.FC = () => {
 
     setIsStarting(true);
     try {
-      if (wsConnected) {
-        await sendCommand('start_recording', {
-          match_id: matchId,
-          process_after_recording: processAfterRecording,
-        });
-      } else {
-        // REST fallback
+      const startRecordingViaRest = async () => {
         try {
           const previewStatus = await apiService.getPreviewStatus();
           if (previewStatus.streaming) {
@@ -86,6 +86,23 @@ export const Dashboard: React.FC = () => {
           match_id: matchId,
           process_after_recording: processAfterRecording,
         });
+      };
+
+      if (wsConnected) {
+        try {
+          await sendCommand('start_recording', {
+            match_id: matchId,
+            process_after_recording: processAfterRecording,
+          });
+        } catch (err) {
+          if (isWsTransportError(err)) {
+            await startRecordingViaRest();
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        await startRecordingViaRest();
       }
       setMatchId('');
       setSuccessMessage('Recording started successfully!');
@@ -109,17 +126,29 @@ export const Dashboard: React.FC = () => {
     setIsStopping(true);
     setConfirmStop(false);
     try {
-      if (wsConnected) {
-        await sendCommand('stop_recording');
-        const duration = status?.duration_seconds || 0;
-        const durationMins = Math.floor(duration / 60);
-        const durationSecs = Math.round(duration % 60);
-        setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
-      } else {
+      const stopRecordingViaRest = async () => {
         const result = await apiService.stopRecording();
         const durationMins = Math.floor(result.duration_seconds / 60);
         const durationSecs = Math.round(result.duration_seconds % 60);
         setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+      };
+
+      if (wsConnected) {
+        try {
+          await sendCommand('stop_recording');
+          const duration = status?.duration_seconds || 0;
+          const durationMins = Math.floor(duration / 60);
+          const durationSecs = Math.round(duration % 60);
+          setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+        } catch (err) {
+          if (isWsTransportError(err)) {
+            await stopRecordingViaRest();
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        await stopRecordingViaRest();
       }
       setTimeout(() => setSuccessMessage(null), 8000);
     } catch (err: any) {
