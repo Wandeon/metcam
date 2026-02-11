@@ -54,7 +54,7 @@ class ConnectionManager:
         self._channel_running: dict[str, bool] = {ch: False for ch in ALL_CHANNELS}
         self._data_sources: dict[str, Callable] = {}
         self._command_handler: Optional[Callable] = None
-        self._recent_command_ids: OrderedDict[str, float] = OrderedDict()
+        self._recent_commands: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ws_executor")
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -170,20 +170,27 @@ class ConnectionManager:
 
         # Idempotency check
         self._purge_expired_commands()
-        if cmd_id in self._recent_command_ids:
-            await self._send(websocket, {
-                "v": PROTOCOL_VERSION,
-                "type": "command_result",
-                "id": cmd_id,
-                "success": True,
-                "deduplicated": True,
-            })
+        if cmd_id in self._recent_commands:
+            cached = self._recent_commands[cmd_id].get("result")
+            if cached:
+                replay = dict(cached)
+                replay["deduplicated"] = True
+                await self._send(websocket, replay)
+            else:
+                await self._send(websocket, {
+                    "v": PROTOCOL_VERSION,
+                    "type": "command_ack",
+                    "id": cmd_id,
+                    "action": action,
+                    "deduplicated": True,
+                    "in_progress": True,
+                })
             return
 
         # Cache the command ID
-        self._recent_command_ids[cmd_id] = time.time()
-        if len(self._recent_command_ids) > MAX_COMMAND_IDS:
-            self._recent_command_ids.popitem(last=False)
+        self._recent_commands[cmd_id] = {"ts": time.time(), "result": None}
+        if len(self._recent_commands) > MAX_COMMAND_IDS:
+            self._recent_commands.popitem(last=False)
 
         # Send ack immediately
         await self._send(websocket, {
@@ -195,13 +202,15 @@ class ConnectionManager:
 
         # Execute command in executor
         if not self._command_handler:
-            await self._send(websocket, {
+            failure = {
                 "v": PROTOCOL_VERSION,
                 "type": "command_result",
                 "id": cmd_id,
                 "success": False,
                 "error": "Command handler not configured",
-            })
+            }
+            self._recent_commands[cmd_id]["result"] = failure
+            await self._send(websocket, failure)
             return
 
         loop = asyncio.get_event_loop()
@@ -212,13 +221,15 @@ class ConnectionManager:
                 action,
                 params,
             )
-            await self._send(websocket, {
+            success = {
                 "v": PROTOCOL_VERSION,
                 "type": "command_result",
                 "id": cmd_id,
                 "success": True,
                 "data": result,
-            })
+            }
+            self._recent_commands[cmd_id]["result"] = success
+            await self._send(websocket, success)
 
             # Trigger eager refresh for state-changing commands
             state_changing = {
@@ -232,19 +243,25 @@ class ConnectionManager:
 
         except Exception as e:
             logger.error(f"Command '{action}' failed: {e}")
-            await self._send(websocket, {
+            failure = {
                 "v": PROTOCOL_VERSION,
                 "type": "command_result",
                 "id": cmd_id,
                 "success": False,
                 "error": str(e),
-            })
+            }
+            self._recent_commands[cmd_id]["result"] = failure
+            await self._send(websocket, failure)
 
     def _purge_expired_commands(self) -> None:
         now = time.time()
-        expired = [k for k, t in self._recent_command_ids.items() if now - t > COMMAND_ID_TTL]
+        expired = [
+            cmd_id
+            for cmd_id, entry in self._recent_commands.items()
+            if now - float(entry.get("ts", 0.0)) > COMMAND_ID_TTL
+        ]
         for k in expired:
-            del self._recent_command_ids[k]
+            del self._recent_commands[k]
 
     # ========================================================================
     # Broadcast loops
