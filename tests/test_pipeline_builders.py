@@ -90,6 +90,8 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("queue name=preenc_queue", pipeline)
         self.assertIn("queue name=postenc_queue", pipeline)
         self.assertIn("queue name=mux_queue", pipeline)
+        self.assertIn("h264parse config-interval=-1", pipeline)
+        self.assertNotIn("h264parse config-interval=-1 disable-passthrough=true", pipeline)
 
     def test_build_recording_pipeline_defaults_to_high_for_invalid_preset(self) -> None:
         pipeline = self.module.build_recording_pipeline(
