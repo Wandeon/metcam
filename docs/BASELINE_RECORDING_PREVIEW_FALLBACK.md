@@ -74,6 +74,18 @@ to evaluate longer GOP settings for CPU reduction.
 Conclusion: keep `fast` preset at `key-int-max=90` as the validated baseline for
 stability and CPU behavior on current hardware/software.
 
+### NV12-to-I420 Handoff Validation (Issue #37, 2026-02-11)
+
+An explicit NV12 handoff experiment (`x264enc` fed with NV12 instead of I420) was
+tested on metcam and reverted after regression:
+
+- NV12 branch (`PR #45`) fast runs: CPU avg **~91.4%**, **93.0%**, **92.8%**
+- Revert branch (`PR #46`) fast run: CPU avg **~85.4%**
+- Stop/finalization remained clean after revert
+
+Conclusion: keep recording encoder handoff at **I420** in baseline. Re-evaluate only
+with a different end-to-end pipeline strategy and fresh hardware-in-loop evidence.
+
 ### Recording stop behavior (critical)
 
 Recording uses **EOS stop** for clean segment finalization:
