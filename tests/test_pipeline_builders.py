@@ -63,6 +63,7 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("left=480 right=3360 top=272 bottom=1888", pipeline)
         self.assertIn("width=2880,height=1616", pipeline)
         self.assertIn("exposurecompensation=0.15", pipeline)
+        self.assertIn("video/x-raw,format=I420,width=2880,height=1616", pipeline)
 
     def test_build_camera_source_clamps_oversized_crop_values(self) -> None:
         cam_cfg = {
