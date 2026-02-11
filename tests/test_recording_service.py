@@ -430,6 +430,45 @@ class TestRecordingService(unittest.TestCase):
         self.assertFalse(second["healthy"])
         self.assertIn("cam0: Segment not growing", second["message"])
 
+    def test_check_recording_health_reports_probe_failure_for_stable_large_segment(self) -> None:
+        match_id = "match_probe_failure"
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        cam0 = segments_dir / "cam0_test_00.mp4"
+        cam1 = segments_dir / "cam1_test_00.mp4"
+        cam0.write_bytes(b"x" * (4 * 1024 * 1024 + 1024))
+        cam1.write_bytes(b"x" * (4 * 1024 * 1024 + 1024))
+
+        stale = time.time() - 40
+        fresh = time.time() - 2
+        os.utime(cam0, (stale, stale))
+        os.utime(cam1, (fresh, fresh))
+
+        self.service.current_match_id = match_id
+        self.service.recording_start_time = time.time() - 80
+        self._mark_recording_pipelines_running()
+        self.service.health_last_segment_snapshot[0] = {
+            "name": cam0.name,
+            "size": cam0.stat().st_size,
+            "mtime": cam0.stat().st_mtime,
+            "index": 0,
+            "checked_at": time.time() - 15,
+        }
+
+        self.service._probe_segment_integrity = lambda path, now: {
+            "checked": True,
+            "ok": False,
+            "error": "simulated_probe_failure",
+            "cached": False,
+        }
+
+        health = self.service.check_recording_health()
+        self.assertFalse(health["healthy"])
+        self.assertIn("cam0: Segment probe failed (simulated_probe_failure)", health["message"])
+        self.assertIn("camera_diagnostics", health)
+        self.assertTrue(health["camera_diagnostics"]["camera_0"]["integrity_probe"]["checked"])
+        self.assertFalse(health["camera_diagnostics"]["camera_0"]["integrity_probe"]["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

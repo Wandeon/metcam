@@ -9,6 +9,8 @@ import time
 import json
 import re
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -48,6 +50,10 @@ class RecordingService:
         self.camera_recovery_state: Dict[int, Dict[str, Any]] = {}
         self.degraded_cameras: Dict[str, str] = {}
         self.health_last_segment_snapshot: Dict[int, Dict[str, Any]] = {}
+        self.health_probe_cache: Dict[str, Dict[str, Any]] = {}
+        self.health_probe_cache_ttl_seconds = 10.0
+        self.health_probe_min_size_bytes = 4 * 1024 * 1024  # Probe only larger/stable segments.
+        self.health_probe_min_stable_age_seconds = 10.0
         
         # Recording protection
         self.protection_seconds = 10.0  # Don't allow stop within first 10s
@@ -96,6 +102,7 @@ class RecordingService:
         }
         self.degraded_cameras = {}
         self.health_last_segment_snapshot = {}
+        self.health_probe_cache = {}
 
     @staticmethod
     def _build_output_pattern(match_dir: Path, cam_id: int) -> str:
@@ -111,6 +118,141 @@ class RecordingService:
         except Exception as e:
             logger.warning("Failed to load quality preset from config: %s, using 'high'", e)
             return 'high'
+
+    def _probe_segment_integrity(self, path: Path, now: float) -> Dict[str, Any]:
+        """Probe a finalized segment with ffprobe, using a short-lived cache."""
+        def _prune_probe_cache(max_entries: int = 200):
+            if len(self.health_probe_cache) <= max_entries:
+                return
+            ordered = sorted(
+                self.health_probe_cache.items(),
+                key=lambda item: float(item[1].get("checked_at", 0.0)),
+            )
+            for key, _ in ordered[:-max_entries]:
+                self.health_probe_cache.pop(key, None)
+
+        path_key = str(path)
+        cache_entry = self.health_probe_cache.get(path_key)
+        mtime = path.stat().st_mtime
+        size = path.stat().st_size
+        if cache_entry:
+            same_file_state = (
+                cache_entry.get("mtime") == mtime
+                and cache_entry.get("size") == size
+            )
+            cache_age = now - float(cache_entry.get("checked_at", 0.0))
+            if same_file_state and cache_age <= self.health_probe_cache_ttl_seconds:
+                result = dict(cache_entry.get("result", {}))
+                result["cached"] = True
+                return result
+
+        ffprobe_bin = shutil.which("ffprobe")
+        if not ffprobe_bin:
+            result = {
+                "checked": False,
+                "ok": None,
+                "error": "ffprobe_not_available",
+                "cached": False,
+            }
+            self.health_probe_cache[path_key] = {
+                "mtime": mtime,
+                "size": size,
+                "checked_at": now,
+                "result": result,
+            }
+            _prune_probe_cache()
+            return result
+
+        cmd = [
+            ffprobe_bin,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,avg_frame_rate,nb_read_frames",
+            "-show_entries",
+            "format=duration,size,bit_rate",
+            "-of",
+            "json",
+            "-count_frames",
+            str(path),
+        ]
+        try:
+            probe = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+                check=False,
+            )
+        except Exception as e:
+            result = {
+                "checked": True,
+                "ok": False,
+                "error": f"ffprobe_exception:{e}",
+                "cached": False,
+            }
+            self.health_probe_cache[path_key] = {
+                "mtime": mtime,
+                "size": size,
+                "checked_at": now,
+                "result": result,
+            }
+            _prune_probe_cache()
+            return result
+
+        if probe.returncode != 0:
+            error_text = (probe.stderr or "").strip()
+            result = {
+                "checked": True,
+                "ok": False,
+                "error": error_text or f"ffprobe_exit_{probe.returncode}",
+                "cached": False,
+            }
+            self.health_probe_cache[path_key] = {
+                "mtime": mtime,
+                "size": size,
+                "checked_at": now,
+                "result": result,
+            }
+            _prune_probe_cache()
+            return result
+
+        try:
+            parsed = json.loads(probe.stdout or "{}")
+        except json.JSONDecodeError:
+            parsed = {}
+
+        streams = parsed.get("streams") or []
+        format_info = parsed.get("format") or {}
+        if not streams:
+            result = {
+                "checked": True,
+                "ok": False,
+                "error": "no_video_stream",
+                "cached": False,
+            }
+        else:
+            result = {
+                "checked": True,
+                "ok": True,
+                "error": None,
+                "cached": False,
+                "duration": format_info.get("duration"),
+                "bit_rate": format_info.get("bit_rate"),
+                "avg_frame_rate": streams[0].get("avg_frame_rate"),
+                "nb_read_frames": streams[0].get("nb_read_frames"),
+            }
+
+        self.health_probe_cache[path_key] = {
+            "mtime": mtime,
+            "size": size,
+            "checked_at": now,
+            "result": result,
+        }
+        _prune_probe_cache()
+        return result
 
     def _handle_pipeline_error(self, camera_id: int, match_id: str, error: Any, debug: Any):
         """Schedule bounded camera pipeline recovery after an asynchronous pipeline error."""
@@ -681,9 +823,15 @@ class RecordingService:
 
             issues = []
             now = time.time()
+            camera_diagnostics: Dict[str, Dict[str, Any]] = {}
             for cam_id in self.camera_ids:
+                camera_key = f"camera_{cam_id}"
                 pipeline_name = f"recording_cam{cam_id}"
                 pipeline_info = self.gst_manager.get_pipeline_status(pipeline_name)
+                camera_diagnostics[camera_key] = {
+                    "pipeline_present": pipeline_info is not None,
+                    "pipeline_state": pipeline_info.state.value if pipeline_info is not None else "missing",
+                }
                 if pipeline_info is None:
                     issues.append(f"cam{cam_id}: Pipeline missing")
                 elif pipeline_info.state.value != "running":
@@ -691,6 +839,7 @@ class RecordingService:
 
                 cam_segments = [segment for segment in segments if f"cam{cam_id}_" in segment.name]
                 if not cam_segments:
+                    camera_diagnostics[camera_key]["latest_segment"] = None
                     if recording_age > 20:
                         issues.append(f"cam{cam_id}: No segment files after 20 seconds")
                     continue
@@ -698,6 +847,14 @@ class RecordingService:
                 latest = max(cam_segments, key=lambda path: path.stat().st_mtime)
                 size = latest.stat().st_size
                 age = time.time() - latest.stat().st_mtime
+                camera_diagnostics[camera_key]["latest_segment"] = latest.name
+                camera_diagnostics[camera_key]["latest_segment_size"] = size
+                camera_diagnostics[camera_key]["latest_segment_age_seconds"] = round(age, 3)
+                camera_diagnostics[camera_key]["integrity_probe"] = {
+                    "checked": False,
+                    "ok": None,
+                    "error": None,
+                }
 
                 if size == 0 and age > 10:
                     issues.append(f"cam{cam_id}: Zero-byte file")
@@ -727,6 +884,20 @@ class RecordingService:
                     ):
                         issues.append(f"cam{cam_id}: Segment not growing (size={size})")
 
+                should_probe = bool(
+                    previous
+                    and latest.name == previous.get("name")
+                    and size == previous.get("size")
+                    and (now - previous.get("checked_at", now)) > self.health_probe_min_stable_age_seconds
+                    and age > self.health_probe_min_stable_age_seconds
+                    and size >= self.health_probe_min_size_bytes
+                )
+                if should_probe:
+                    probe_result = self._probe_segment_integrity(latest, now)
+                    camera_diagnostics[camera_key]["integrity_probe"] = probe_result
+                    if probe_result.get("checked") and probe_result.get("ok") is False:
+                        issues.append(f"cam{cam_id}: Segment probe failed ({probe_result.get('error')})")
+
                 self.health_last_segment_snapshot[cam_id] = {
                     "name": latest.name,
                     "size": size,
@@ -745,12 +916,14 @@ class RecordingService:
                     "message": ", ".join(issues),
                     "issues": issues,
                     "recovery_attempts": recovery_attempts,
+                    "camera_diagnostics": camera_diagnostics,
                 }
 
             return {
                 "healthy": True,
                 "message": "Recording healthy",
                 "recovery_attempts": recovery_attempts,
+                "camera_diagnostics": camera_diagnostics,
             }
         except Exception as e:
             logger.error(f"Error checking recording health: {e}")
