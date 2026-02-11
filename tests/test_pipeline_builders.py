@@ -83,6 +83,8 @@ class TestPipelineBuilders(unittest.TestCase):
         )
         self.assertIn("speed-preset=fast", pipeline)
         self.assertIn("bitrate=22000", pipeline)
+        self.assertIn("vbv-maxrate=22000", pipeline)
+        self.assertIn("vbv-bufsize=44000", pipeline)
         self.assertIn("splitmuxsink", pipeline)
         self.assertIn("location=/tmp/cam0_%02d.mp4", pipeline)
         self.assertIn("queue name=preenc_queue", pipeline)
@@ -98,6 +100,8 @@ class TestPipelineBuilders(unittest.TestCase):
         )
         self.assertIn("speed-preset=veryfast", pipeline)
         self.assertIn("bitrate=25000", pipeline)
+        self.assertIn("vbv-maxrate=25000", pipeline)
+        self.assertIn("vbv-bufsize=50000", pipeline)
 
     def test_build_preview_pipeline_contains_hls_outputs(self) -> None:
         pipeline = self.module.build_preview_pipeline(
