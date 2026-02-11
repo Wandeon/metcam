@@ -86,6 +86,26 @@ tested on metcam and reverted after regression:
 Conclusion: keep recording encoder handoff at **I420** in baseline. Re-evaluate only
 with a different end-to-end pipeline strategy and fresh hardware-in-loop evidence.
 
+### Queue Policy Validation (Issue #33, 2026-02-11)
+
+A stage-specific queue policy experiment was run on metcam under stressed
+`balanced` preset conditions:
+
+- Baseline (all three queues `leaky=downstream`), match `issue33_baseline_balanced_1770847733`
+  - CPU avg **89.78%**
+  - `cam0` output unprobeable (`moov atom not found`)
+  - `cam1` effective fps **~10.32**
+  - stop result: `cam0` EOS timeout / non-finalized
+- Candidate (only `preenc_queue` leaky; post-encode/mux non-leaky), match `issue33_candidate_balanced_1770847866`
+  - CPU avg **90.14%**
+  - `cam0` output unprobeable (`moov atom not found`)
+  - `cam1` effective fps **~10.32**
+  - stop result: `cam0` EOS timeout / non-finalized
+
+Conclusion: this queue-policy change did not improve integrity or fps on the target
+hardware. Keep current queue policy while addressing root-cause overload via preset
+tuning (`#34`, `#39`).
+
 ### Recording stop behavior (critical)
 
 Recording uses **EOS stop** for clean segment finalization:
