@@ -126,6 +126,39 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("b-adapt=false", pipeline)
         self.assertIn("bframes=0", pipeline)
 
+    def test_recording_preset_ladder_has_monotonic_quality_vs_cost_shape(self) -> None:
+        fast = self.module.build_recording_pipeline(
+            camera_id=0,
+            output_pattern="/tmp/cam0_fast_%02d.mp4",
+            config_path=str(self.config_path),
+            quality_preset="fast",
+        )
+        balanced = self.module.build_recording_pipeline(
+            camera_id=0,
+            output_pattern="/tmp/cam0_balanced_%02d.mp4",
+            config_path=str(self.config_path),
+            quality_preset="balanced",
+        )
+        high = self.module.build_recording_pipeline(
+            camera_id=0,
+            output_pattern="/tmp/cam0_high_%02d.mp4",
+            config_path=str(self.config_path),
+            quality_preset="high",
+        )
+
+        # Bitrate ladder: fast < balanced < high.
+        self.assertIn("bitrate=20000", fast)
+        self.assertIn("bitrate=22000", balanced)
+        self.assertIn("bitrate=25000", high)
+
+        # Complexity ladder: fast is cheapest, balanced/high are higher.
+        self.assertIn("speed-preset=ultrafast", fast)
+        self.assertIn("speed-preset=superfast", balanced)
+        self.assertIn("speed-preset=superfast", high)
+        self.assertIn("bframes=0", fast)
+        self.assertIn("bframes=1", balanced)
+        self.assertIn("bframes=1", high)
+
     def test_build_preview_pipeline_contains_hls_outputs(self) -> None:
         pipeline = self.module.build_preview_pipeline(
             camera_id=1,
