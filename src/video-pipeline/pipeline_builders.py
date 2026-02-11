@@ -234,7 +234,8 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             f"psy-tune={preset['psy_tune']} threads=0 ",
             f"bitrate={preset['bitrate']} key-int-max={preset['key_int_max']} ",
             f"b-adapt={preset['b_adapt']} bframes={preset['bframes']} ",
-            f"aud=true byte-stream=false option-string={preset['options']} ! ",
+            # Recording consumers do not require AUD NAL units; disabling removes bitstream overhead.
+            f"aud=false byte-stream=false option-string={preset['options']} ! ",
             "queue name=postenc_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
             "h264parse config-interval=-1 ! ",
             "video/x-h264,stream-format=avc ! ",

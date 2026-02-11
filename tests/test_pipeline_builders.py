@@ -90,6 +90,8 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("queue name=preenc_queue", pipeline)
         self.assertIn("queue name=postenc_queue", pipeline)
         self.assertIn("queue name=mux_queue", pipeline)
+        self.assertIn("aud=false byte-stream=false", pipeline)
+        self.assertNotIn("aud=true byte-stream=false", pipeline)
         self.assertIn("h264parse config-interval=-1", pipeline)
         self.assertNotIn("h264parse config-interval=-1 disable-passthrough=true", pipeline)
 
@@ -114,6 +116,7 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("hlssink2", pipeline)
         self.assertIn("playlist-location=/dev/shm/hls/cam1.m3u8", pipeline)
         self.assertIn("location=/dev/shm/hls/cam1_%05d.ts", pipeline)
+        self.assertIn("aud=true", pipeline)
 
     def test_build_preview_webrtc_pipeline_contains_webrtcbin(self) -> None:
         pipeline = self.module.build_preview_webrtc_pipeline(
