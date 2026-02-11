@@ -63,6 +63,8 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("left=480 right=3360 top=272 bottom=1888", pipeline)
         self.assertIn("width=2880,height=1616", pipeline)
         self.assertIn("exposurecompensation=0.15", pipeline)
+        self.assertIn("video/x-raw,format=NV12,width=2880,height=1616", pipeline)
+        self.assertNotIn("video/x-raw,format=I420", pipeline)
 
     def test_build_camera_source_clamps_oversized_crop_values(self) -> None:
         cam_cfg = {
@@ -90,6 +92,7 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("queue name=preenc_queue", pipeline)
         self.assertIn("queue name=postenc_queue", pipeline)
         self.assertIn("queue name=mux_queue", pipeline)
+        self.assertIn("video/x-raw,format=NV12", pipeline)
 
     def test_build_recording_pipeline_defaults_to_high_for_invalid_preset(self) -> None:
         pipeline = self.module.build_recording_pipeline(
