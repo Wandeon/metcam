@@ -236,10 +236,12 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             f"b-adapt={preset['b_adapt']} bframes={preset['bframes']} ",
             # Recording consumers do not require AUD NAL units; disabling removes bitstream overhead.
             f"aud=false byte-stream=false option-string={preset['options']} ! ",
-            "queue name=postenc_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
+            # Do not drop encoded data before parse/mux; preserve timeline integrity under stress.
+            "queue name=postenc_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 ! ",
             "h264parse config-interval=-1 ! ",
             "video/x-h264,stream-format=avc ! ",
-            "queue name=mux_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
+            # Keep mux input lossless; backpressure is preferable to silent frame/data drops.
+            "queue name=mux_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 ! ",
             "splitmuxsink name=sink ",
             f"location={output_pattern} ",
             "max-size-time=600000000000 ",
