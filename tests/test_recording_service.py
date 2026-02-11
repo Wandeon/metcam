@@ -98,7 +98,21 @@ class TestRecordingService(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_start_recording_partial_camera_success(self) -> None:
+    def test_start_recording_partial_camera_rolls_back_when_strict_mode_enabled(self) -> None:
+        self.service.gst_manager.create_results["recording_cam1"] = False
+
+        result = self.service.start_recording("match_partial", process_after_recording=False)
+
+        self.assertFalse(result["success"])
+        self.assertIn("Failed to start all required cameras", result["message"])
+        self.assertEqual(result["cameras_started"], [])
+        self.assertEqual(result["cameras_failed"], [1])
+        self.assertEqual(self.service.current_match_id, None)
+        self.assertTrue(result["require_all_cameras"])
+        self.assertIn("recording_cam0", self.service.gst_manager.remove_calls)
+
+    def test_start_recording_partial_camera_success_when_strict_mode_disabled(self) -> None:
+        self.service.require_all_cameras = False
         self.service.gst_manager.create_results["recording_cam1"] = False
 
         result = self.service.start_recording("match_partial", process_after_recording=False)
@@ -108,6 +122,7 @@ class TestRecordingService(unittest.TestCase):
         self.assertEqual(result["cameras_started"], [0])
         self.assertEqual(result["cameras_failed"], [1])
         self.assertEqual(self.service.current_match_id, "match_partial")
+        self.assertFalse(result["require_all_cameras"])
 
     def test_start_recording_all_failures(self) -> None:
         self.service.gst_manager.start_results["recording_cam0"] = False
@@ -116,7 +131,7 @@ class TestRecordingService(unittest.TestCase):
         result = self.service.start_recording("match_fail", process_after_recording=False)
 
         self.assertFalse(result["success"])
-        self.assertIn("Failed to start any cameras", result["message"])
+        self.assertIn("Failed to start all required cameras", result["message"])
         self.assertEqual(self.service.current_match_id, None)
 
     def test_stop_recording_protection_and_force(self) -> None:
