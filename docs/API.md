@@ -1,72 +1,48 @@
-# FootballVision Pro - API Reference
+# FootballVision Pro API Reference
 
-## Base URL
-- **Production:** `http://localhost:8000/api/v1`
-- **Development:** `http://localhost:8001/api/v1`
+## Base URLs
+- Production: `http://localhost:8000/api/v1`
+- Development: `http://localhost:8001/api/v1`
 
 ## Authentication
-Currently no authentication required (internal network only).
+- No API authentication is implemented at this time.
+- Intended for trusted/internal network usage.
 
-## Endpoints
+## REST Endpoints
 
-### Recording Management
+### Health and State
 
-#### Start Recording
-```http
-POST /api/v1/recording
-Content-Type: application/json
+#### `GET /api/v1/health`
+Returns basic host health.
 
-{
-  "match_id": "match_20251104_001",
-  "force": false,
-  "process_after_recording": true
-}
-```
-
-**Parameters:**
-- `match_id` (string, required): Unique identifier for the match
-- `force` (boolean, optional): Force start even if recording is active (default: false)
-- `process_after_recording` (boolean, optional): Automatically merge segments and re-encode to archive quality when recording stops (default: false)
-
-**Response:**
+Example response:
 ```json
 {
-  "success": true,
-  "message": "Recording started for match: match_20251104_001",
-  "match_id": "match_20251104_001",
-  "cameras_started": [0, 1],
-  "cameras_failed": []
+  "status": "healthy",
+  "system": {
+    "cpu_percent": 7.6,
+    "memory_percent": 38.5,
+    "memory_available_gb": 4.58,
+    "disk_free_gb": 135.61,
+    "disk_percent": 38.8
+  }
 }
 ```
 
-#### Stop Recording
-```http
-DELETE /api/v1/recording
-```
+#### `GET /api/v1/status`
+Returns top-level preview + recording state.
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Recording stopped successfully"
-}
-```
-
-**Note:** If `process_after_recording` was enabled when starting the recording, post-processing will automatically begin in the background after stopping.
-
-#### Get Recording Status
-```http
-GET /api/v1/status
-```
-
-**Response:**
+Example response:
 ```json
 {
   "recording": {
     "recording": false,
     "match_id": null,
     "duration": 0.0,
-    "cameras": {}
+    "cameras": {},
+    "degraded": false,
+    "degraded_cameras": {},
+    "camera_recovery": {}
   },
   "preview": {
     "preview_active": false,
@@ -88,263 +64,292 @@ GET /api/v1/status
 }
 ```
 
-### Preview Management
+#### `GET /api/v1/pipeline-state`
+Returns mutex state used to enforce preview/recording exclusivity.
 
-#### Start Preview
-```http
-POST /api/v1/preview
-Content-Type: application/json
+Example response:
+```json
+{
+  "mode": "idle",
+  "holder": null,
+  "lock_time": null,
+  "can_preview": true,
+  "can_record": true
+}
+```
 
+### Recording
+
+#### `GET /api/v1/recording`
+Returns active recording state.
+
+#### `POST /api/v1/recording`
+Starts recording.
+
+Request body:
+```json
+{
+  "match_id": "match_20260211_001",
+  "force": false,
+  "process_after_recording": false
+}
+```
+
+Notes:
+- `match_id` is optional. If omitted, server generates one.
+- `force=true` can replace an existing recording.
+- Current config supports strict dual-camera startup (`recording_require_all_cameras`).
+
+Example success response:
+```json
+{
+  "success": true,
+  "message": "Recording started for match: match_20260211_001",
+  "match_id": "match_20260211_001",
+  "cameras_started": [0, 1],
+  "cameras_failed": [],
+  "require_all_cameras": true
+}
+```
+
+#### `DELETE /api/v1/recording?force=false`
+Stops recording.
+
+Notes:
+- Protected-stop window is enforced by service (`protection_seconds`, currently 10s).
+- If within protection window, call with `force=true`.
+
+Example success response:
+```json
+{
+  "success": true,
+  "message": "Recording stopped successfully",
+  "graceful_stop": true,
+  "camera_stop_results": {
+    "camera_0": {
+      "success": true,
+      "eos_received": true,
+      "timed_out": false,
+      "error": null
+    },
+    "camera_1": {
+      "success": true,
+      "eos_received": true,
+      "timed_out": false,
+      "error": null
+    }
+  }
+}
+```
+
+#### `GET /api/v1/recording-health`
+Returns recording health diagnostics.
+
+Example response:
+```json
+{
+  "healthy": true,
+  "message": "Recording healthy",
+  "recovery_attempts": {
+    "camera_0": 0,
+    "camera_1": 0
+  }
+}
+```
+
+### Preview
+
+#### `GET /api/v1/preview`
+Returns current preview state.
+
+#### `POST /api/v1/preview`
+Starts preview for one or both cameras.
+
+Request body:
+```json
 {
   "camera_id": null
 }
 ```
 
-**Parameters:**
-- `camera_id` (integer, optional): Start preview for specific camera (0 or 1), or null for all cameras
+- `camera_id=null` means both cameras.
+- `camera_id=0` or `1` targets a single camera.
 
-**Response:**
+#### `DELETE /api/v1/preview?camera_id=0`
+Stops preview for one camera or all cameras.
+
+#### `POST /api/v1/preview/restart`
+Restarts preview pipeline(s) with the same `camera_id` shape as start.
+
+### Recordings Inventory and File Access
+
+#### `GET /api/v1/recordings`
+Lists recordings with grouped segment metadata.
+
+#### `GET /api/v1/recordings/{match_id}/segments`
+Returns normalized segment lists by camera (`cam0`, `cam1`, `other`).
+
+#### `DELETE /api/v1/recordings/{match_id}`
+Deletes the recording directory.
+
+#### `GET /api/v1/recordings/{match_id}/processing-status`
+Returns post-processing status if enabled.
+
+#### `GET /api/v1/recordings/{match_id}/download`
+Downloads entire recording folder as zip.
+
+#### `GET /api/v1/recordings/{match_id}/segments/{segment_name}`
+Downloads a segment file.
+
+#### `GET /api/v1/recordings/{match_id}/files/{file_name}`
+Downloads a direct file from match directory.
+
+### Diagnostics
+
+#### `GET /api/v1/system-metrics`
+Returns real-time system metrics used by dashboard and WS broadcasts.
+
+#### `GET /api/v1/logs/{log_type}?lines=100`
+Supported `log_type` values:
+- `health`
+- `alerts`
+- `watchdog`
+
+## WebSocket (`/ws`)
+
+The WebSocket layer is implemented and used as the real-time status + command plane.
+
+### Connection
+- Endpoint: `ws://<host>/ws` (or `wss://` behind TLS reverse proxy)
+- Protocol version: `v = 1`
+- Maximum concurrent connections: `10`
+- Default subscription on connect: `status`
+
+Server sends on connect:
 ```json
 {
-  "success": true,
-  "message": "Preview started for all cameras"
+  "v": 1,
+  "type": "hello",
+  "channels": ["status"]
 }
 ```
 
-#### Stop Preview
-```http
-DELETE /api/v1/preview
+### Client-to-Server Messages
+
+#### Ping
+```json
+{"v": 1, "type": "ping"}
 ```
 
-**Response:**
+#### Subscribe
+```json
+{"v": 1, "type": "subscribe", "channels": ["status", "pipeline_state"]}
+```
+
+#### Unsubscribe
+```json
+{"v": 1, "type": "unsubscribe", "channels": ["pipeline_state"]}
+```
+
+#### Command
 ```json
 {
-  "success": true,
-  "message": "Preview stopped"
-}
-```
-
-### Health & Monitoring
-
-#### System Health
-```http
-GET /api/v1/health
-```
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "2025-11-04T19:00:00Z",
-  "version": "3.0.0",
-  "cameras": {
-    "camera_0": {"available": true, "sensor": "IMX462"},
-    "camera_1": {"available": true, "sensor": "IMX462"}
-  },
-  "services": {
-    "recording": "ready",
-    "preview": "ready",
-    "post_processing": "ready"
+  "v": 1,
+  "type": "command",
+  "id": "cmd-123",
+  "action": "start_recording",
+  "params": {
+    "match_id": "match_20260211_001",
+    "force": false,
+    "process_after_recording": false
   }
 }
 ```
 
-#### Prometheus Metrics
-```http
-GET /metrics
-```
+### Server-to-Client Messages
 
-**Response:** Prometheus-formatted metrics for monitoring
-
-**Metrics include:**
-- `recording_active` - Whether recording is currently active
-- `recording_duration_seconds` - Current recording duration
-- `camera_status` - Status of each camera (0=inactive, 1=active)
-- `api_requests_total` - Total API requests counter
-- `api_request_duration_seconds` - Request duration histogram
-
-### Recordings
-
-#### List Recordings
-```http
-GET /api/v1/recordings
-```
-
-**Response:**
+#### Broadcast channel update
 ```json
 {
-  "recordings": [
-    {
-      "match_id": "match_20251104_001",
-      "date": "2025-11-04",
-      "cameras": [
-        {
-          "camera_id": 0,
-          "segments": [
-            {
-              "filename": "cam0_1730741000.mp4",
-              "size_mb": 2700,
-              "duration_seconds": 600
-            }
-          ],
-          "archive": {
-            "filename": "cam0_archive.mp4",
-            "size_mb": 2600,
-            "available": true
-          }
-        }
-      ],
-      "total_size_mb": 18000,
-      "processing_status": "complete"
-    }
-  ]
+  "v": 1,
+  "type": "status",
+  "ts": 1770837041.2668238,
+  "data": {"recording": {}, "preview": {}}
 }
 ```
 
-#### Get Processing Status
-```http
-GET /api/v1/recordings/{match_id}/processing-status
-```
-
-**Response:**
+#### Command ack (phase 1)
 ```json
 {
-  "processing": false,
-  "completed": true,
-  "status": "done",
-  "start_time": "2025-11-04T15:30:00Z",
-  "end_time": "2025-11-04T19:15:00Z",
-  "duration_seconds": 13500
+  "v": 1,
+  "type": "command_ack",
+  "id": "cmd-123",
+  "action": "start_recording"
 }
 ```
 
-**Status values:**
-- `processing` - Currently encoding
-- `done` - Processing complete
-- `null` - Never processed
-
-#### Download Recording
-```http
-GET /api/v1/recordings/{match_id}/files/{filename}
-```
-
-**Parameters:**
-- `match_id` (string): Match identifier
-- `filename` (string): File to download (e.g., `cam0_archive.mp4` or `cam0_1730741000.mp4`)
-
-**Response:** Binary file download with appropriate headers
-
-**Example:**
-```bash
-curl -O http://localhost:8000/api/v1/recordings/match_20251104_001/files/cam0_archive.mp4
-```
-
-#### Delete Recording
-```http
-DELETE /api/v1/recordings/{match_id}
-```
-
-**Response:**
+#### Command result (phase 2)
 ```json
 {
+  "v": 1,
+  "type": "command_result",
+  "id": "cmd-123",
   "success": true,
-  "message": "Recording deleted: match_20251104_001"
+  "data": {"success": true, "message": "..."}
 }
 ```
 
-**Warning:** This deletes all files (segments and archives) for the match. Operation is irreversible.
-
-## Post-Processing
-
-### Overview
-
-Post-processing automatically merges 10-minute recording segments and re-encodes them to archive quality:
-
-- **Input:** Raw camera segments (~2.7 GB per 10 minutes @ 12 Mbps)
-- **Output:** Single archive file per camera (~2.6 GB per camera for 100-minute match)
-- **Compression:** ~80% smaller than original segments
-- **Quality:** 1920x1080, H.264 CRF 28, preset slower, tune film
-- **Duration:** ~3-4 hours for 100-minute match
-
-### Workflow
-
-1. User starts recording with `process_after_recording: true`
-2. Dual cameras record segments to `/mnt/recordings/{match_id}/segments/`
-3. User stops recording
-4. Post-processing automatically starts in background:
-   - Merges all segments per camera using ffmpeg concat demuxer
-   - Re-encodes to 1920x1080 with CRF 28 (aggressive compression)
-   - Outputs to `/mnt/recordings/{match_id}/cam*_archive.mp4`
-5. If Nextcloud credentials configured, uploads archives to cloud storage
-6. Original segments remain on device for re-processing if needed
-
-### Upload to Nextcloud (Optional)
-
-After successful encoding, archives can be automatically uploaded to Nextcloud:
-
-- **Destination:** `https://drive.genai.hr/FootballVision/YYYY-MM/{match_id}/`
-- **Method:** WebDAV (Nextcloud standard)
-- **Configuration:** Set `NEXTCLOUD_USERNAME` and `NEXTCLOUD_PASSWORD` environment variables
-- **Documentation:** See [NEXTCLOUD_INTEGRATION_GUIDE.md](NEXTCLOUD_INTEGRATION_GUIDE.md)
-
-## Error Handling
-
-All endpoints return errors in consistent format:
-
+#### Error
 ```json
 {
-  "success": false,
-  "error": "Error message describing the issue"
+  "v": 1,
+  "type": "error",
+  "code": "invalid_version",
+  "message": "Expected v=1"
 }
 ```
 
-**Common HTTP Status Codes:**
-- `200` - Success
-- `400` - Bad request (invalid parameters)
-- `404` - Resource not found
-- `409` - Conflict (e.g., recording already active)
-- `500` - Internal server error
+### Broadcast Channels and Intervals
+- `status` (1.0s)
+- `pipeline_state` (2.0s)
+- `system_metrics` (3.0s)
+- `panorama_status` (3.0s)
 
-## Rate Limiting
+### Supported WS Command Actions
+- `start_recording`
+- `stop_recording`
+- `start_preview`
+- `stop_preview`
+- `get_recordings`
+- `get_logs`
+- `get_panorama_processing`
 
-No rate limiting currently implemented (internal network only).
+### Command Idempotency
+- Recent command IDs are deduplicated.
+- Cache size: 200 command IDs.
+- TTL: 60 seconds.
+- Duplicate command ID returns cached `command_result` (or in-progress ack).
 
-## WebSocket Support
+## Error Behavior
 
-Currently not implemented. Status updates require polling the `/api/v1/status` endpoint.
-
-## Camera Configuration
-
-Camera settings are managed via `/home/mislav/footballvision-pro/config/camera_config.json`:
-
+Two patterns are used:
+1. FastAPI exceptions (`HTTPException`):
 ```json
-{
-  "cameras": [
-    {
-      "id": 0,
-      "sensor_id": 0,
-      "sensor": "IMX462",
-      "width": 2880,
-      "height": 1752,
-      "fps": 30,
-      "bitrate_kbps": 12000
-    }
-  ]
-}
+{"detail": "..."}
+```
+2. Service-level operation results:
+```json
+{"success": false, "message": "..."}
 ```
 
-**Note:** Camera configuration changes require API service restart.
-
-## Implementation Details
-
-For complete endpoint implementation, see:
-- API Server: [simple_api_v3.py](../src/platform/simple_api_v3.py)
-- Recording Service: [recording_service.py](../src/video-pipeline/recording_service.py)
-- Post-Processing: [post_processing_service.py](../src/video-pipeline/post_processing_service.py)
-- Nextcloud Upload: [nextcloud_upload_service.py](../src/video-pipeline/nextcloud_upload_service.py)
+## Related Files
+- API server: `src/platform/simple_api_v3.py`
+- WS manager: `src/platform/ws_manager.py`
+- Recording service: `src/video-pipeline/recording_service.py`
+- Preview service: `src/video-pipeline/preview_service.py`
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2025-11-04
-**System Version:** FootballVision Pro v3 (Enhanced API)
+Document version: 2.0  
+Last updated: 2026-02-11  
+System: FootballVision Pro v3

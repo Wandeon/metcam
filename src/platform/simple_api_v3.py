@@ -279,7 +279,9 @@ def start_recording(request: RecordingRequest):
             logger.warning(f"Recording start failed: {result}")
         
         return result
-        
+    
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to start recording: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -370,7 +372,9 @@ def start_preview(request: PreviewRequest):
             logger.warning(f"Preview start failed: {result}")
         
         return result
-        
+    
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to start preview: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -419,6 +423,9 @@ def restart_preview(request: PreviewRequest):
         logger.info(f"Preview restart requested: camera_id={request.camera_id}")
         result = preview_service.restart_preview(camera_id=request.camera_id)
         return result
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to restart preview: {e}")
         raise HTTPException(status_code=500, detail=str(e))

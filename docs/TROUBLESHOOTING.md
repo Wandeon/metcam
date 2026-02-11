@@ -290,10 +290,10 @@ journalctl -u footballvision-api-enhanced -n 50
 1. **Pipeline locked by previous operation**
    ```bash
    # Stop preview
-   curl -X POST http://localhost:8000/api/v1/preview/stop
+   curl -X DELETE http://localhost:8000/api/v1/preview
 
    # Stop recording
-   curl -X POST http://localhost:8000/api/v1/recording/stop
+   curl -X DELETE "http://localhost:8000/api/v1/recording?force=true"
 
    # Check state again
    curl http://localhost:8000/api/v1/pipeline-state
@@ -317,7 +317,7 @@ journalctl -u footballvision-api-enhanced -n 50
 **Solution:**
 ```bash
 # Stop preview first
-curl -X POST http://localhost:8000/api/v1/preview/stop
+curl -X DELETE http://localhost:8000/api/v1/preview
 
 # Wait 2 seconds
 sleep 2
@@ -616,7 +616,7 @@ cat /sys/devices/virtual/thermal/thermal_zone*/temp
 
 2. **Ensure preview is stopped**
    ```bash
-   curl -X POST http://localhost:8000/api/v1/preview/stop
+   curl -X DELETE http://localhost:8000/api/v1/preview
    sleep 2
    # Then start recording
    ```
