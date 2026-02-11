@@ -82,8 +82,10 @@ class TestPipelineBuilders(unittest.TestCase):
             config_path=str(self.config_path),
             quality_preset="balanced",
         )
-        self.assertIn("speed-preset=fast", pipeline)
+        self.assertIn("speed-preset=superfast", pipeline)
         self.assertIn("bitrate=22000", pipeline)
+        self.assertIn("key-int-max=90", pipeline)
+        self.assertIn("bframes=1", pipeline)
         self.assertIn("vbv-maxrate=22000", pipeline)
         self.assertIn("vbv-bufsize=44000", pipeline)
         self.assertIn("splitmuxsink", pipeline)
@@ -106,8 +108,9 @@ class TestPipelineBuilders(unittest.TestCase):
             config_path=str(self.config_path),
             quality_preset="does_not_exist",
         )
-        self.assertIn("speed-preset=veryfast", pipeline)
+        self.assertIn("speed-preset=superfast", pipeline)
         self.assertIn("bitrate=25000", pipeline)
+        self.assertIn("bframes=1", pipeline)
         self.assertIn("vbv-maxrate=25000", pipeline)
         self.assertIn("vbv-bufsize=50000", pipeline)
 
@@ -120,6 +123,8 @@ class TestPipelineBuilders(unittest.TestCase):
         )
         self.assertIn("speed-preset=ultrafast", pipeline)
         self.assertIn("key-int-max=90", pipeline)
+        self.assertIn("b-adapt=false", pipeline)
+        self.assertIn("bframes=0", pipeline)
 
     def test_build_preview_pipeline_contains_hls_outputs(self) -> None:
         pipeline = self.module.build_preview_pipeline(

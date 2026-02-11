@@ -56,9 +56,22 @@ Per camera flow:
 
 ### Quality presets
 
-- `high` (default): `veryfast`, film tune, 25 Mbps, b-frames enabled
-- `balanced`: `fast`, film tune, 22 Mbps
-- `fast`: `ultrafast`, 20 Mbps
+- `high`: `superfast`, film tune, 25 Mbps, `bframes=1`, `rc-lookahead=10`
+- `balanced`: `superfast`, film tune, 22 Mbps, `bframes=1`, `rc-lookahead=10`
+- `fast` (default): `ultrafast`, 20 Mbps, `bframes=0`, `rc-lookahead=0`
+
+### Preset Stability Validation (Issue #34, 2026-02-11)
+
+Retuned ladder validation on metcam (`ec92796`) using 20-25s dual-camera runs:
+
+| Preset | Match ID | Stop Success | Graceful Stop | Cam0 Probe | Cam1 Probe | Cam0 FPS | Cam1 FPS | CPU Avg |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |
+| `fast` | `issue34_fast_1770848727` | true | true | true | true | 30.01 | 30.05 | 39.07% |
+| `balanced` | `issue34_balanced_1770848805` | true | true | true | true | 29.64 | 29.55 | 57.65% |
+| `high` | `issue34_high_1770848661` | true | true | true | true | 29.70 | 29.73 | 67.20% |
+
+This replaced the previously unstable behavior where `balanced` could produce
+unprobeable output and ~10 fps under stress.
 
 ### GOP Tuning Validation (Issue #40, 2026-02-11)
 
