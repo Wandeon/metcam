@@ -25,6 +25,19 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("pano_service.get_processing_status(match_id)", source)
         self.assertNotIn("return get_processing_status(match_id)", source)
 
+    def test_preview_route_preserves_starlette_http_status(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        section_match = re.search(
+            r"def start_preview\(request: PreviewRequest\):(?P<body>.*?)@app.delete\(\"/api/v1/preview\"\)",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(section_match, "start_preview route block not found")
+        body = section_match.group("body")
+        self.assertIn("isinstance(e, StarletteHTTPException)", body)
+        self.assertIn("status_code=e.status_code", body)
+        self.assertIn("detail=e.detail", body)
+
     def test_dashboard_has_transport_level_rest_fallback(self) -> None:
         source = (ROOT / "src/platform/web-dashboard/src/pages/Dashboard.tsx").read_text(encoding="utf-8")
         self.assertIn("function isWsTransportError", source)

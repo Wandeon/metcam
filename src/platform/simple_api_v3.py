@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 from typing import Optional
 from collections import defaultdict
@@ -376,6 +377,13 @@ def start_preview(request: PreviewRequest):
     except HTTPException:
         raise
     except Exception as e:
+        # Preserve explicit HTTP responses raised from Starlette/FastAPI layers.
+        if isinstance(e, StarletteHTTPException):
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers=getattr(e, "headers", None),
+            )
         logger.error(f"Failed to start preview: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
