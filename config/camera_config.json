@@ -9,6 +9,8 @@
   "_recording_recovery_max_attempts_comment": "Number of automatic per-camera restart attempts after asynchronous pipeline errors before marking recording degraded.",
   "recording_recovery_backoff_seconds": 1.0,
   "_recording_recovery_backoff_seconds_comment": "Base seconds for linear backoff between camera recovery attempts.",
+  "recording_stop_eos_timeout_seconds": 8.0,
+  "_recording_stop_eos_timeout_seconds_comment": "Seconds to wait for EOS when stopping recording before forcing NULL state.",
   "cameras": {
     "0": {
       "rotation": 0.0,

@@ -11,7 +11,7 @@ from gi.repository import Gst, GLib
 import threading
 import logging
 import time
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, Any
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
@@ -241,30 +241,32 @@ class GStreamerManager:
                 pipe_data['error'] = str(e)
                 return False
 
-    def stop_pipeline(self, name: str, wait_for_eos: bool = True, timeout: float = 5.0) -> bool:
-        """
-        Stop a pipeline gracefully.
-
-        Args:
-            name: Pipeline name
-            wait_for_eos: Send EOS and wait for clean shutdown
-            timeout: Max time to wait for EOS (seconds)
-
-        Returns:
-            True if stopped successfully
-        """
+    def _stop_pipeline_internal(self, name: str, wait_for_eos: bool = True, timeout: float = 5.0) -> Dict[str, Any]:
+        """Stop a pipeline and return detailed stop metadata."""
         with self.pipelines_lock:
             if name not in self.pipelines:
                 logger.error(f"Pipeline '{name}' not found")
-                return False
+                return {
+                    "success": False,
+                    "eos_received": False,
+                    "timed_out": False,
+                    "error": "pipeline_not_found",
+                }
 
             pipe_data = self.pipelines[name]
             pipeline = pipe_data['pipeline']
 
             if pipe_data['state'] == PipelineState.IDLE:
                 logger.warning(f"Pipeline '{name}' already stopped")
-                return True
+                return {
+                    "success": True,
+                    "eos_received": False,
+                    "timed_out": False,
+                    "error": None,
+                }
 
+            eos_received = False
+            timed_out = False
             try:
                 logger.info(f"Stopping pipeline '{name}' (wait_for_eos={wait_for_eos})")
                 pipe_data['state'] = PipelineState.STOPPING
@@ -284,11 +286,20 @@ class GStreamerManager:
                         if msg:
                             if msg.type == Gst.MessageType.EOS:
                                 logger.info(f"Pipeline '{name}': EOS received during stop")
+                                eos_received = True
                                 break
-                            elif msg.type == Gst.MessageType.ERROR:
+                            if msg.type == Gst.MessageType.ERROR:
                                 err, _ = msg.parse_error()
                                 logger.warning(f"Pipeline '{name}': Error during EOS: {err.message}")
                                 break
+
+                    if wait_for_eos and not eos_received:
+                        timed_out = True
+                        logger.warning(
+                            "Pipeline '%s': EOS wait timed out after %.2fs; forcing NULL state",
+                            name,
+                            timeout,
+                        )
 
                 # Set to NULL state
                 ret = pipeline.set_state(Gst.State.NULL)
@@ -298,18 +309,47 @@ class GStreamerManager:
                 pipe_data['state'] = PipelineState.IDLE
                 pipe_data['start_time'] = None
                 logger.info(f"Pipeline '{name}' stopped successfully")
-                return True
+                return {
+                    "success": True,
+                    "eos_received": eos_received,
+                    "timed_out": timed_out,
+                    "error": None,
+                }
 
             except Exception as e:
                 logger.error(f"Exception stopping pipeline '{name}': {e}")
                 # Force to NULL on error
                 try:
                     pipeline.set_state(Gst.State.NULL)
-                except:
+                except Exception:
                     pass
                 pipe_data['state'] = PipelineState.ERROR
                 pipe_data['error'] = str(e)
-                return False
+                return {
+                    "success": False,
+                    "eos_received": False,
+                    "timed_out": False,
+                    "error": str(e),
+                }
+
+    def stop_pipeline(self, name: str, wait_for_eos: bool = True, timeout: float = 5.0) -> bool:
+        """
+        Stop a pipeline gracefully.
+
+        Args:
+            name: Pipeline name
+            wait_for_eos: Send EOS and wait for clean shutdown
+            timeout: Max time to wait for EOS (seconds)
+
+        Returns:
+            True if stopped successfully
+        """
+        details = self._stop_pipeline_internal(name, wait_for_eos=wait_for_eos, timeout=timeout)
+        return bool(details.get("success"))
+
+    def stop_pipeline_with_details(self, name: str, wait_for_eos: bool = True, timeout: float = 5.0) -> Dict[str, Any]:
+        """Stop a pipeline gracefully and return EOS/timeout details."""
+        return self._stop_pipeline_internal(name, wait_for_eos=wait_for_eos, timeout=timeout)
 
     def remove_pipeline(self, name: str) -> bool:
         """Remove and cleanup a pipeline"""

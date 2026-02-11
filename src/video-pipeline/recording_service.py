@@ -35,6 +35,7 @@ class RecordingService:
         self.require_all_cameras = True
         self.max_recovery_attempts = 2
         self.recovery_backoff_seconds = 1.0
+        self.stop_eos_timeout_seconds = 5.0
 
         # Recording state
         self.current_match_id: Optional[str] = None
@@ -68,6 +69,7 @@ class RecordingService:
             self.require_all_cameras = bool(config.get('recording_require_all_cameras', True))
             self.max_recovery_attempts = max(0, int(config.get('recording_recovery_max_attempts', 2)))
             self.recovery_backoff_seconds = max(0.0, float(config.get('recording_recovery_backoff_seconds', 1.0)))
+            self.stop_eos_timeout_seconds = max(1.0, float(config.get('recording_stop_eos_timeout_seconds', 5.0)))
         except Exception as e:
             logger.warning(
                 "Failed to load recording policy from config: %s. Using defaults.",
@@ -76,6 +78,7 @@ class RecordingService:
             self.require_all_cameras = True
             self.max_recovery_attempts = 2
             self.recovery_backoff_seconds = 1.0
+            self.stop_eos_timeout_seconds = 5.0
 
     def _init_recovery_state(self):
         """Reset per-camera recovery state for the current recording session."""
@@ -509,7 +512,7 @@ class RecordingService:
                 'require_all_cameras': self.require_all_cameras
             }
     
-    def _stop_recording_internal(self, force: bool = False) -> bool:
+    def _stop_recording_internal(self, force: bool = False) -> Dict[str, Any]:
         """
         Internal method to stop recording
         
@@ -517,10 +520,15 @@ class RecordingService:
             force: Skip protection check
             
         Returns:
-            True if stopped successfully
+            Dict with stop details
         """
         if self.current_match_id is None:
-            return False
+            return {
+                "success": False,
+                "message": "No active recording",
+                "graceful_stop": False,
+                "camera_stop_results": {},
+            }
         
         # Check recording protection
         if not force:
@@ -532,18 +540,44 @@ class RecordingService:
                 )
         
         logger.info(f"Stopping recording for match: {self.current_match_id}")
-        
+
         # Stop both cameras
+        camera_stop_results = {}
         for cam_id in self.camera_ids:
             pipeline_name = f'recording_cam{cam_id}'
             try:
-                # Graceful stop with EOS (takes ~2s, not 15s)
-                self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=True, timeout=5.0)
+                # Graceful stop with EOS, forcing NULL state after configured timeout.
+                if hasattr(self.gst_manager, "stop_pipeline_with_details"):
+                    details = self.gst_manager.stop_pipeline_with_details(
+                        pipeline_name,
+                        wait_for_eos=True,
+                        timeout=self.stop_eos_timeout_seconds,
+                    )
+                else:
+                    # Backward-compatibility path for tests/stubs without the new API.
+                    success = self.gst_manager.stop_pipeline(
+                        pipeline_name,
+                        wait_for_eos=True,
+                        timeout=self.stop_eos_timeout_seconds,
+                    )
+                    details = {
+                        "success": bool(success),
+                        "eos_received": bool(success),
+                        "timed_out": False,
+                        "error": None if success else "stop_pipeline returned False",
+                    }
                 logger.info(f"Camera {cam_id} recording stopped")
+                camera_stop_results[f"camera_{cam_id}"] = details
                 # Remove pipeline from memory to allow fresh start next time
                 self.gst_manager.remove_pipeline(pipeline_name)
             except Exception as e:
                 logger.error(f"Failed to stop camera {cam_id}: {e}")
+                camera_stop_results[f"camera_{cam_id}"] = {
+                    "success": False,
+                    "eos_received": False,
+                    "timed_out": False,
+                    "error": str(e),
+                }
         
         # Trigger post-processing if enabled
         should_process = self.process_after_recording
@@ -566,7 +600,21 @@ class RecordingService:
             except Exception as e:
                 logger.error(f"Failed to start post-processing: {e}")
 
-        return True
+        graceful_stop = bool(camera_stop_results) and all(
+            details.get("success") and details.get("eos_received", False)
+            for details in camera_stop_results.values()
+        )
+        success = bool(camera_stop_results) and all(
+            details.get("success")
+            for details in camera_stop_results.values()
+        )
+
+        return {
+            "success": success,
+            "message": "Recording stopped successfully" if success else "Recording stop completed with camera errors",
+            "graceful_stop": graceful_stop,
+            "camera_stop_results": camera_stop_results,
+        }
 
     def check_recording_health(self) -> Dict:
         """Check whether the active recording is producing healthy segment files."""
@@ -626,11 +674,21 @@ class RecordingService:
                 }
             
             try:
-                self._stop_recording_internal(force=force)
-                
+                stop_result = self._stop_recording_internal(force=force)
+
+                if stop_result.get("success"):
+                    return {
+                        'success': True,
+                        'message': 'Recording stopped successfully',
+                        'graceful_stop': stop_result.get("graceful_stop", False),
+                        'camera_stop_results': stop_result.get("camera_stop_results", {}),
+                    }
+
                 return {
-                    'success': True,
-                    'message': 'Recording stopped successfully'
+                    'success': False,
+                    'message': stop_result.get("message", "Recording stop completed with errors"),
+                    'graceful_stop': stop_result.get("graceful_stop", False),
+                    'camera_stop_results': stop_result.get("camera_stop_results", {}),
                 }
                 
             except ValueError as e:
