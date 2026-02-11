@@ -215,8 +215,8 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 ### Automated Installation (Recommended)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/footballvision-pro.git
-cd footballvision-pro
+git clone https://github.com/Wandeon/metcam.git
+cd metcam
 ./deploy/install-complete.sh
 ```
 

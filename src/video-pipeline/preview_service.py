@@ -22,7 +22,7 @@ class PreviewService:
     """
     Manages dual-camera HLS preview using in-process GStreamer
     - Instant start/stop
-    - Independent from recording (can run simultaneously)
+    - API layer enforces mutual exclusion with recording via pipeline lock
     - Survives page refreshes
     """
     
