@@ -115,7 +115,7 @@ class TestPipelineBuilders(unittest.TestCase):
             quality_preset="fast",
         )
         self.assertIn("speed-preset=ultrafast", pipeline)
-        self.assertIn("key-int-max=120", pipeline)
+        self.assertIn("key-int-max=180", pipeline)
 
     def test_build_preview_pipeline_contains_hls_outputs(self) -> None:
         pipeline = self.module.build_preview_pipeline(

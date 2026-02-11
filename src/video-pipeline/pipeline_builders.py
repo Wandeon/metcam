@@ -215,8 +215,8 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             "tune": 0x00000000,  # No tune flags (removed zerolatency to allow bframes)
             "psy_tune": "none",
             "bitrate": 20000,
-            # Longer GOP lowers keyframe frequency (~4s at 30fps) for archive recording efficiency.
-            "key_int_max": 120,
+            # Longer GOP lowers keyframe frequency (~6s at 30fps) for archive recording efficiency.
+            "key_int_max": 180,
             "bframes": 3,
             "b_adapt": "true",
             "options": "repeat-headers=1:scenecut=0:open-gop=0:vbv-maxrate=20000:vbv-bufsize=40000"
