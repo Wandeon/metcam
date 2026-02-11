@@ -734,7 +734,8 @@ def _handle_ws_command(action: str, params: dict) -> dict:
         if not match_id:
             raise Exception("match_id is required")
         try:
-            return get_processing_status(match_id)
+            from panorama_router import panorama_service as pano_service
+            return pano_service.get_processing_status(match_id)
         except HTTPException as e:
             raise Exception(e.detail)
 
