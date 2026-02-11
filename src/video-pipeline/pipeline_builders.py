@@ -193,9 +193,9 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             "psy_tune": "film",
             "bitrate": 25000,
             "key_int_max": 90,
-            "bframes": 2,
+            "bframes": 1,
             "b_adapt": "true",
-            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=3:rc-lookahead=20:qpmin=18:qpmax=32:vbv-maxrate=25000:vbv-bufsize=50000"
+            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=2:rc-lookahead=10:qpmin=18:qpmax=32:vbv-maxrate=25000:vbv-bufsize=50000"
         },
         "balanced": {
             "speed_preset": "superfast",

@@ -110,7 +110,7 @@ class TestPipelineBuilders(unittest.TestCase):
         )
         self.assertIn("speed-preset=veryfast", pipeline)
         self.assertIn("bitrate=25000", pipeline)
-        self.assertIn("bframes=2", pipeline)
+        self.assertIn("bframes=1", pipeline)
         self.assertIn("vbv-maxrate=25000", pipeline)
         self.assertIn("vbv-bufsize=50000", pipeline)
 
