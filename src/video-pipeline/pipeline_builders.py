@@ -228,13 +228,17 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
     pipeline = "".join(
         [
             source_section,
+            # Queue isolation protects camera capture from encoder/sink backpressure.
+            "queue name=preenc_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
             f"x264enc name=enc speed-preset={preset['speed_preset']} tune={preset['tune']} ",
             f"psy-tune={preset['psy_tune']} threads=0 ",
             f"bitrate={preset['bitrate']} key-int-max={preset['key_int_max']} ",
             f"b-adapt={preset['b_adapt']} bframes={preset['bframes']} ",
             f"aud=true byte-stream=false option-string={preset['options']} ! ",
+            "queue name=postenc_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
             "h264parse config-interval=-1 disable-passthrough=true ! ",
             "video/x-h264,stream-format=avc ! ",
+            "queue name=mux_queue max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! ",
             "splitmuxsink name=sink ",
             f"location={output_pattern} ",
             "max-size-time=600000000000 ",

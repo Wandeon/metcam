@@ -85,6 +85,9 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("bitrate=22000", pipeline)
         self.assertIn("splitmuxsink", pipeline)
         self.assertIn("location=/tmp/cam0_%02d.mp4", pipeline)
+        self.assertIn("queue name=preenc_queue", pipeline)
+        self.assertIn("queue name=postenc_queue", pipeline)
+        self.assertIn("queue name=mux_queue", pipeline)
 
     def test_build_recording_pipeline_defaults_to_high_for_invalid_preset(self) -> None:
         pipeline = self.module.build_recording_pipeline(
@@ -115,4 +118,3 @@ class TestPipelineBuilders(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
