@@ -21,6 +21,12 @@ async function fetchStatusRaw(): Promise<StatusResponseV3> {
   return response.json();
 }
 
+function isWsTransportError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  const normalized = message.toLowerCase();
+  return normalized.includes('websocket not connected') || normalized.includes('websocket disconnected');
+}
+
 export const Preview: React.FC = () => {
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,16 +64,26 @@ export const Preview: React.FC = () => {
   const handleStartPreview = async () => {
     setIsStarting(true);
     try {
-      if (wsConnected) {
-        await sendCommand('start_preview');
-      } else {
+      const startPreviewViaRest = async () => {
         const status = await apiService.getStatus();
         if (status.recording) {
-          setError('Cannot start preview while recording is active. Please stop recording first.');
-          setTimeout(() => setError(null), 5000);
-          return;
+          throw new Error('Cannot start preview while recording is active. Please stop recording first.');
         }
         await apiService.startPreview({ mode: 'normal' });
+      };
+
+      if (wsConnected) {
+        try {
+          await sendCommand('start_preview');
+        } catch (err) {
+          if (isWsTransportError(err)) {
+            await startPreviewViaRest();
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        await startPreviewViaRest();
       }
       // Wait for HLS files to be ready before showing players
       await new Promise(resolve => setTimeout(resolve, 6000));
@@ -83,16 +99,26 @@ export const Preview: React.FC = () => {
   const handleStartCalibration = async () => {
     setIsStarting(true);
     try {
-      if (wsConnected) {
-        await sendCommand('start_preview');
-      } else {
+      const startCalibrationViaRest = async () => {
         const status = await apiService.getStatus();
         if (status.recording) {
-          setError('Cannot start calibration while recording is active. Please stop recording first.');
-          setTimeout(() => setError(null), 5000);
-          return;
+          throw new Error('Cannot start calibration while recording is active. Please stop recording first.');
         }
         await apiService.startPreview({ mode: 'calibration' });
+      };
+
+      if (wsConnected) {
+        try {
+          await sendCommand('start_preview');
+        } catch (err) {
+          if (isWsTransportError(err)) {
+            await startCalibrationViaRest();
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        await startCalibrationViaRest();
       }
       await new Promise(resolve => setTimeout(resolve, 6000));
     } catch (err: any) {
@@ -107,10 +133,22 @@ export const Preview: React.FC = () => {
   const handleStopPreview = async () => {
     setIsStopping(true);
     try {
-      if (wsConnected) {
-        await sendCommand('stop_preview');
-      } else {
+      const stopPreviewViaRest = async () => {
         await apiService.stopPreview();
+      };
+
+      if (wsConnected) {
+        try {
+          await sendCommand('stop_preview');
+        } catch (err) {
+          if (isWsTransportError(err)) {
+            await stopPreviewViaRest();
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        await stopPreviewViaRest();
       }
     } catch (err: any) {
       setError(err.message || 'Failed to stop preview');
