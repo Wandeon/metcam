@@ -30,6 +30,9 @@ class RecordingService:
     def __init__(self, base_recordings_dir: str = "/mnt/recordings"):
         self.base_recordings_dir = Path(base_recordings_dir)
         self.gst_manager = GStreamerManager()
+
+        # Recording policy (loaded from camera config with safe defaults)
+        self.require_all_cameras = True
         
         # Recording state
         self.current_match_id: Optional[str] = None
@@ -47,7 +50,20 @@ class RecordingService:
         self.camera_ids = [0, 1]
         
         # Load persisted state on startup
+        self._load_recording_policy()
         self._load_state()
+
+    def _load_recording_policy(self):
+        """Load runtime recording policy from camera config."""
+        try:
+            config = load_camera_config()
+            self.require_all_cameras = bool(config.get('recording_require_all_cameras', True))
+        except Exception as e:
+            logger.warning(
+                "Failed to load recording policy from config: %s. Using defaults.",
+                e,
+            )
+            self.require_all_cameras = True
     
     def _load_state(self):
         """Load persisted recording state from disk"""
@@ -234,6 +250,35 @@ class RecordingService:
                     logger.error(f"Failed to start camera {cam_id}: {e}")
                     failed_cameras.append(cam_id)
             
+            # Strict dual-camera mode: rollback partial start to avoid asymmetric recordings.
+            if self.require_all_cameras and failed_cameras:
+                logger.error(
+                    "Strict dual-camera mode enabled: rolling back partial start "
+                    "(started=%s, failed=%s)",
+                    started_cameras,
+                    failed_cameras,
+                )
+                for cam_id in started_cameras:
+                    pipeline_name = f'recording_cam{cam_id}'
+                    try:
+                        self.gst_manager.stop_pipeline(pipeline_name, wait_for_eos=False, timeout=1.0)
+                    except Exception as stop_error:
+                        logger.warning(
+                            "Failed to stop partially started camera %s during rollback: %s",
+                            cam_id,
+                            stop_error,
+                        )
+                    finally:
+                        self.gst_manager.remove_pipeline(pipeline_name)
+
+                return {
+                    'success': False,
+                    'message': 'Failed to start all required cameras',
+                    'cameras_started': [],
+                    'cameras_failed': failed_cameras,
+                    'require_all_cameras': True
+                }
+
             # Check if at least one camera started
             if not started_cameras:
                 return {
@@ -255,7 +300,8 @@ class RecordingService:
                 'message': f'Recording started for match: {match_id}',
                 'match_id': match_id,
                 'cameras_started': started_cameras,
-                'cameras_failed': failed_cameras
+                'cameras_failed': failed_cameras,
+                'require_all_cameras': self.require_all_cameras
             }
     
     def _stop_recording_internal(self, force: bool = False) -> bool:
