@@ -11,8 +11,8 @@ from fastapi.responses import FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 from typing import Optional
-from collections import defaultdict
-from datetime import datetime
+from collections import defaultdict, deque
+from datetime import datetime, timedelta
 import re
 import sys
 import os
@@ -1362,6 +1362,149 @@ def get_system_metrics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _read_last_lines(path: Path, lines: int) -> list[str]:
+    """Read up to N trailing lines from a log file without loading it all into memory."""
+    with path.open("r", errors="replace") as handle:
+        return list(deque((line.rstrip("\n") for line in handle), maxlen=lines))
+
+
+def _parse_log_timestamp(line: str) -> Optional[datetime]:
+    """
+    Parse leading timestamps in app log lines.
+    Supported formats:
+    - 2026-02-11 22:02:52,698
+    - 2026-02-11 22:02:52
+    """
+    match = re.match(r"^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:,\\d{3,6})?)", line)
+    if not match:
+        return None
+
+    raw = match.group(1)
+    for fmt in ("%Y-%m-%d %H:%M:%S,%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _collect_recording_diagnostics(
+    lookback_minutes: int = 60,
+    max_lines: int = 5000,
+    correlation_window_seconds: int = 180,
+) -> dict:
+    """
+    Correlate NvVIC errors with recording timeout/probe-failure events from local logs.
+    This is a read-only diagnostics utility for field investigation.
+    """
+    now = datetime.utcnow()
+    cutoff = now - timedelta(minutes=lookback_minutes)
+    window = max(1, int(correlation_window_seconds))
+
+    api_log_path = Path("/var/log/footballvision/api/api_v3.log")
+    error_log_path = Path("/var/log/footballvision/api/error.log")
+
+    nvvic_patterns = (
+        "failed to allocate buffer",
+        "failed to open NvVIC",
+        "failed to allocate neighbor buffer",
+    )
+    timeout_pattern = "EOS wait timed out"
+    probe_pattern = "Segment probe failed"
+
+    nvvic_events: list[dict] = []
+    timeout_events: list[dict] = []
+    probe_events: list[dict] = []
+
+    if error_log_path.exists():
+        for line in _read_last_lines(error_log_path, max_lines):
+            if not any(pattern in line for pattern in nvvic_patterns):
+                continue
+            ts = _parse_log_timestamp(line)
+            if ts and ts < cutoff:
+                continue
+            nvvic_events.append(
+                {
+                    "timestamp": ts.isoformat() if ts else None,
+                    "line": line,
+                }
+            )
+
+    if api_log_path.exists():
+        for line in _read_last_lines(api_log_path, max_lines):
+            ts = _parse_log_timestamp(line)
+            if ts and ts < cutoff:
+                continue
+            if timeout_pattern in line:
+                timeout_events.append(
+                    {
+                        "timestamp": ts.isoformat() if ts else None,
+                        "line": line,
+                    }
+                )
+            if probe_pattern in line:
+                probe_events.append(
+                    {
+                        "timestamp": ts.isoformat() if ts else None,
+                        "line": line,
+                    }
+                )
+
+    timeout_times = []
+    for event in timeout_events:
+        parsed_ts = _parse_log_timestamp(event["line"])
+        if parsed_ts is not None:
+            timeout_times.append(parsed_ts)
+    probe_times = []
+    for event in probe_events:
+        parsed_ts = _parse_log_timestamp(event["line"])
+        if parsed_ts is not None:
+            probe_times.append(parsed_ts)
+
+    correlations: list[dict] = []
+    for event in nvvic_events:
+        ts = _parse_log_timestamp(event["line"])
+        if ts is None:
+            continue
+        related_timeouts = sum(1 for timeout_ts in timeout_times if abs((timeout_ts - ts).total_seconds()) <= window)
+        related_probe_failures = sum(1 for probe_ts in probe_times if abs((probe_ts - ts).total_seconds()) <= window)
+        if related_timeouts or related_probe_failures:
+            correlations.append(
+                {
+                    "timestamp": ts.isoformat(),
+                    "line": event["line"],
+                    "timeouts_within_window": related_timeouts,
+                    "probe_failures_within_window": related_probe_failures,
+                }
+            )
+
+    return {
+        "lookback_minutes": lookback_minutes,
+        "max_lines_scanned": max_lines,
+        "correlation_window_seconds": window,
+        "time_range": {
+            "from": cutoff.isoformat(),
+            "to": now.isoformat(),
+        },
+        "sources": {
+            "api_log": str(api_log_path),
+            "error_log": str(error_log_path),
+        },
+        "counts": {
+            "nvvic_errors": len(nvvic_events),
+            "recording_stop_timeouts": len(timeout_events),
+            "probe_failures": len(probe_events),
+            "correlated_nvvic_events": len(correlations),
+        },
+        "recent": {
+            "nvvic_errors": nvvic_events[-20:],
+            "recording_stop_timeouts": timeout_events[-20:],
+            "probe_failures": probe_events[-20:],
+            "correlations": correlations[-20:],
+        },
+    }
+
+
 @app.get("/api/v1/logs/{log_type}")
 def get_logs(log_type: str, lines: int = 100):
     """Get system logs - supports: health, alerts, watchdog"""
@@ -1395,6 +1538,31 @@ def get_logs(log_type: str, lines: int = 100):
         raise
     except Exception as e:
         logger.error(f"Failed to fetch logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/diagnostics/recording-correlations")
+def get_recording_correlations(
+    lookback_minutes: int = 60,
+    max_lines: int = 5000,
+    correlation_window_seconds: int = 180,
+):
+    """
+    Correlate recent NvVIC errors with recording stop timeout/probe-failure signals.
+    Read-only diagnostics endpoint intended for field tuning and incident analysis.
+    """
+    api_requests.labels(endpoint='recording-correlations', method='GET').inc()
+    try:
+        lookback = min(max(int(lookback_minutes), 1), 24 * 60)
+        lines = min(max(int(max_lines), 200), 50000)
+        window = min(max(int(correlation_window_seconds), 1), 3600)
+        return _collect_recording_diagnostics(
+            lookback_minutes=lookback,
+            max_lines=lines,
+            correlation_window_seconds=window,
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch recording correlations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

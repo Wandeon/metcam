@@ -248,6 +248,21 @@ Supported `log_type` values:
 - `alerts`
 - `watchdog`
 
+#### `GET /api/v1/diagnostics/recording-correlations`
+Correlates recent `NvVIC` allocator/open errors with recording timeout and media-probe-failure signals.
+
+Query params:
+- `lookback_minutes` (default `60`, min `1`, max `1440`)
+- `max_lines` (default `5000`, min `200`, max `50000`)
+- `correlation_window_seconds` (default `180`, min `1`, max `3600`)
+
+Response includes:
+- `counts.nvvic_errors`
+- `counts.recording_stop_timeouts`
+- `counts.probe_failures`
+- `counts.correlated_nvvic_events`
+- recent event slices for each category and correlation entries
+
 ## WebSocket (`/ws`)
 
 The WebSocket layer is implemented and used as the real-time status + command plane.

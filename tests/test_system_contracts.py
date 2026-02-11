@@ -110,6 +110,19 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn('psutil.cpu_percent(interval=0.1)', source)
         self.assertNotIn('subprocess.run(["top", "-bn", "1"]', source)
 
+    def test_recording_correlation_diagnostics_endpoint_exists(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        self.assertIn('@app.get("/api/v1/diagnostics/recording-correlations")', source)
+        self.assertIn("_collect_recording_diagnostics(", source)
+        self.assertIn("recording-correlations", source)
+
+    def test_recording_correlation_scans_nvvic_and_timeout_patterns(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        self.assertIn("failed to open NvVIC", source)
+        self.assertIn("failed to allocate buffer", source)
+        self.assertIn("EOS wait timed out", source)
+        self.assertIn("Segment probe failed", source)
+
     def test_ws_proxy_config_present(self) -> None:
         caddy_source = (ROOT / "deploy/config/Caddyfile").read_text(encoding="utf-8")
         vite_source = (ROOT / "src/platform/web-dashboard/vite.config.ts").read_text(encoding="utf-8")
