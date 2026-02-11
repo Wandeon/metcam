@@ -1165,6 +1165,17 @@ def download_recording_file(match_id: str, file_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/v1/recording-health")
+def get_recording_health():
+    """Get active recording health based on segment freshness and size."""
+    api_requests.labels(endpoint='recording-health', method='GET').inc()
+    try:
+        return recording_service.check_recording_health()
+    except Exception as e:
+        logger.error(f"Failed to get recording health: {e}")
+        return {"healthy": False, "message": f"Error: {e}"}
+
+
 @app.get("/api/v1/system-metrics")
 def get_system_metrics():
     """Get real-time system metrics: power mode, CPU frequencies, temperature, usage"""
