@@ -1375,7 +1375,7 @@ def _parse_log_timestamp(line: str) -> Optional[datetime]:
     - 2026-02-11 22:02:52,698
     - 2026-02-11 22:02:52
     """
-    match = re.match(r"^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:,\\d{3,6})?)", line)
+    match = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:,\d{3,6})?)", line)
     if not match:
         return None
 
