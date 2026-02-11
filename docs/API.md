@@ -125,23 +125,28 @@ Stops recording.
 Notes:
 - Protected-stop window is enforced by service (`protection_seconds`, currently 10s).
 - If within protection window, call with `force=true`.
+- `success=true` means all camera outputs finalized cleanly.
+- `transport_success=true` means stop commands reached/closed pipelines, even if finalization was incomplete.
 
 Example success response:
 ```json
 {
   "success": true,
   "message": "Recording stopped successfully",
+  "transport_success": true,
   "graceful_stop": true,
   "camera_stop_results": {
     "camera_0": {
       "success": true,
       "eos_received": true,
+      "finalized": true,
       "timed_out": false,
       "error": null
     },
     "camera_1": {
       "success": true,
       "eos_received": true,
+      "finalized": true,
       "timed_out": false,
       "error": null
     }
