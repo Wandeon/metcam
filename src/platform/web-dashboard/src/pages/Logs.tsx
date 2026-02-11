@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useWsCommand } from '@/hooks/useWebSocket';
 import { FileText, AlertCircle, Activity, RefreshCw } from 'lucide-react';
 
 type LogType = 'health' | 'alerts' | 'watchdog';
@@ -16,12 +17,25 @@ export function Logs() {
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const fetchLogs = async (logType: LogType) => {
+  const { sendCommand, connected: wsConnected } = useWsCommand();
+
+  const fetchLogs = useCallback(async (logType: LogType) => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/v1/logs/${logType}?lines=200`);
-      const data = await response.json();
-      // Reverse the lines so newest entries are at the top
+      let data: LogData;
+
+      if (wsConnected) {
+        try {
+          data = await sendCommand('get_logs', { log_type: logType, lines: 200 });
+        } catch {
+          const response = await fetch(`/api/v1/logs/${logType}?lines=200`);
+          data = await response.json();
+        }
+      } else {
+        const response = await fetch(`/api/v1/logs/${logType}?lines=200`);
+        data = await response.json();
+      }
+
       if (data.lines) {
         data.lines = data.lines.reverse();
       }
@@ -32,21 +46,21 @@ export function Logs() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [wsConnected, sendCommand]);
 
   useEffect(() => {
     fetchLogs(selectedLog);
-  }, [selectedLog]);
+  }, [selectedLog, fetchLogs]);
 
   useEffect(() => {
     if (!autoRefresh) return;
 
     const interval = setInterval(() => {
       fetchLogs(selectedLog);
-    }, 5000); // Refresh every 5 seconds
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, [selectedLog, autoRefresh]);
+  }, [selectedLog, autoRefresh, fetchLogs]);
 
   const logTabs = [
     { id: 'health' as LogType, label: 'System Health', icon: Activity },

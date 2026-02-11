@@ -1,55 +1,78 @@
 import React, { useState, useEffect } from 'react';
-import { apiService } from '@/services/api';
+import { apiService, StatusResponseV3, PreviewStatus } from '@/services/api';
+import { useWsChannel, useWsCommand } from '@/hooks/useWebSocket';
 import { CameraPreview } from '@/components/CameraPreview';
 import { Play, Square, AlertCircle, Eye } from 'lucide-react';
-// v2.0 - 30fps @ 3Mbps smooth streaming (native 1080p60 sensor mode)
+
+function transformPreviewStatus(raw: StatusResponseV3): PreviewStatus {
+  const preview = raw.preview;
+  return {
+    status: preview.preview_active ? 'streaming' : 'idle',
+    streaming: preview.preview_active,
+    cam0_running: preview.cameras.camera_0.active,
+    cam1_running: preview.cameras.camera_1.active,
+    cam0_url: preview.cameras.camera_0.hls_url,
+    cam1_url: preview.cameras.camera_1.hls_url,
+  };
+}
+
+async function fetchStatusRaw(): Promise<StatusResponseV3> {
+  const response = await fetch('/api/v1/status');
+  return response.json();
+}
 
 export const Preview: React.FC = () => {
-  const [previewStatus, setPreviewStatus] = useState<any>(null);
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [streamKey] = useState(0); // Force HLS player reload (fixed key for v3)
-  const [isReloading] = useState(false); // Not used in v3 (no dynamic config)
+  const [streamKey] = useState(0);
+  const [isReloading] = useState(false);
 
-  const fetchPreviewStatus = async () => {
-    try {
-      const data = await apiService.getPreviewStatus();
-      setPreviewStatus(data);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch preview status');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { sendCommand, connected: wsConnected } = useWsCommand();
 
+  // WS channel + REST fallback both return StatusResponseV3 shape
+  const { data: wsStatusData } = useWsChannel<StatusResponseV3>(
+    'status',
+    fetchStatusRaw,
+    2000,
+  );
+
+  // Process incoming data
   useEffect(() => {
-    fetchPreviewStatus();
-    const interval = setInterval(fetchPreviewStatus, 2000);
-    return () => clearInterval(interval);
+    if (wsStatusData) {
+      setLoading(false);
+      setPreviewStatus(transformPreviewStatus(wsStatusData));
+    }
+  }, [wsStatusData]);
+
+  // Initial fetch
+  useEffect(() => {
+    fetchStatusRaw().then(data => {
+      setPreviewStatus(transformPreviewStatus(data));
+      setLoading(false);
+    }).catch(() => setLoading(false));
   }, []);
 
   const handleStartPreview = async () => {
     setIsStarting(true);
     try {
-      // Check if recording is active
-      const status = await apiService.getStatus();
-      if (status.recording) {
-        setError('Cannot start preview while recording is active. Please stop recording first.');
-        setTimeout(() => setError(null), 5000);
-        return;
+      if (wsConnected) {
+        await sendCommand('start_preview', { mode: 'normal' });
+      } else {
+        const status = await apiService.getStatus();
+        if (status.recording) {
+          setError('Cannot start preview while recording is active. Please stop recording first.');
+          setTimeout(() => setError(null), 5000);
+          return;
+        }
+        await apiService.startPreview({ mode: 'normal' });
       }
-
-      // Start preview in NORMAL mode (same as recording: GPU crop + barrel correction + rotation)
-      await apiService.startPreview({ mode: 'normal' });
-      await fetchPreviewStatus();
       // Wait for HLS files to be ready before showing players
       await new Promise(resolve => setTimeout(resolve, 6000));
-    } catch (err) {
-      setError('Failed to start preview');
+    } catch (err: any) {
+      setError(err.message || 'Failed to start preview');
       setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
@@ -60,21 +83,20 @@ export const Preview: React.FC = () => {
   const handleStartCalibration = async () => {
     setIsStarting(true);
     try {
-      // Check if recording is active
-      const status = await apiService.getStatus();
-      if (status.recording) {
-        setError('Cannot start calibration while recording is active. Please stop recording first.');
-        setTimeout(() => setError(null), 5000);
-        return;
+      if (wsConnected) {
+        await sendCommand('start_preview', { mode: 'calibration' });
+      } else {
+        const status = await apiService.getStatus();
+        if (status.recording) {
+          setError('Cannot start calibration while recording is active. Please stop recording first.');
+          setTimeout(() => setError(null), 5000);
+          return;
+        }
+        await apiService.startPreview({ mode: 'calibration' });
       }
-
-      // Start preview in CALIBRATION mode (center 50% crop, 25% FOV, native 4K sharpness)
-      await apiService.startPreview({ mode: 'calibration' });
-      await fetchPreviewStatus();
-      // Wait for HLS files to be ready before showing players
       await new Promise(resolve => setTimeout(resolve, 6000));
-    } catch (err) {
-      setError('Failed to start calibration');
+    } catch (err: any) {
+      setError(err.message || 'Failed to start calibration');
       setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
@@ -85,10 +107,13 @@ export const Preview: React.FC = () => {
   const handleStopPreview = async () => {
     setIsStopping(true);
     try {
-      await apiService.stopPreview();
-      await fetchPreviewStatus();
-    } catch (err) {
-      setError('Failed to stop preview');
+      if (wsConnected) {
+        await sendCommand('stop_preview');
+      } else {
+        await apiService.stopPreview();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to stop preview');
       setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
@@ -165,9 +190,9 @@ export const Preview: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm">
-                <p className="font-semibold mb-2">📹 Recording Preview:</p>
+                <p className="font-semibold mb-2">Recording Preview:</p>
                 <ul className="space-y-1 text-xs">
-                  <li>• 2880×1620 @ 30fps</li>
+                  <li>• 2880x1620 @ 30fps</li>
                   <li>• GPU crop (56% FOV)</li>
                   <li>• Barrel correction + rotation</li>
                   <li>• SAME as recordings</li>
@@ -175,9 +200,9 @@ export const Preview: React.FC = () => {
               </div>
 
               <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
-                <p className="font-semibold mb-2">🎯 Calibration Mode:</p>
+                <p className="font-semibold mb-2">Calibration Mode:</p>
                 <ul className="space-y-1 text-xs">
-                  <li>• Center 50% crop (1920×1080)</li>
+                  <li>• Center 50% crop (1920x1080)</li>
                   <li>• 25% FOV @ 30fps</li>
                   <li>• 8 Mbps native 4K sharpness</li>
                   <li>• For focus check</li>
@@ -206,16 +231,16 @@ export const Preview: React.FC = () => {
             cameraId={0}
             streamUrl={previewStatus.cam0_url}
             title="Camera 0"
-            resolution={previewStatus.output_resolution || '1920x1080'}
-            framerate={previewStatus.framerate || 30}
+            resolution={(previewStatus as any).output_resolution || '1920x1080'}
+            framerate={(previewStatus as any).framerate || 30}
           />
           <CameraPreview
             key={`cam1-${streamKey}`}
             cameraId={1}
             streamUrl={previewStatus.cam1_url}
             title="Camera 1"
-            resolution={previewStatus.output_resolution || '1920x1080'}
-            framerate={previewStatus.framerate || 30}
+            resolution={(previewStatus as any).output_resolution || '1920x1080'}
+            framerate={(previewStatus as any).framerate || 30}
           />
         </div>
       )}
@@ -229,26 +254,26 @@ export const Preview: React.FC = () => {
 
       {isStreaming && (
         <div className={`px-4 py-3 rounded-lg text-sm ${
-          previewStatus?.mode === 'calibration'
+          (previewStatus as any)?.mode === 'calibration'
             ? 'bg-blue-50 border border-blue-200 text-blue-800'
             : 'bg-yellow-50 border border-yellow-200 text-yellow-800'
         }`}>
-          {previewStatus?.mode === 'calibration' ? (
+          {(previewStatus as any)?.mode === 'calibration' ? (
             <>
-              <p className="font-semibold mb-1">🎯 Calibration Mode Active:</p>
+              <p className="font-semibold mb-1">Calibration Mode Active:</p>
               <ul className="space-y-1">
-                <li>• <strong>1920×1080 @ 30fps</strong> - Native 4K center crop (25% FOV)</li>
+                <li>• <strong>1920x1080 @ 30fps</strong> - Native 4K center crop (25% FOV)</li>
                 <li>• <strong>8 Mbps</strong> - High quality encoding for maximum detail</li>
-                <li>• <strong>Center 50% each axis</strong> - Native 4K pixels, 4× sharper than downscaled preview</li>
+                <li>• <strong>Center 50% each axis</strong> - Native 4K pixels, 4x sharper than downscaled preview</li>
                 <li>• Use this mode to fine-tune camera focus and check image quality</li>
                 <li>• Stream will stop when you start recording</li>
               </ul>
             </>
           ) : (
             <>
-              <p className="font-semibold mb-1">📹 Recording Preview Active:</p>
+              <p className="font-semibold mb-1">Recording Preview Active:</p>
               <ul className="space-y-1">
-                <li>• <strong>2880×1620 @ 30fps</strong> - Same resolution as recordings</li>
+                <li>• <strong>2880x1620 @ 30fps</strong> - Same resolution as recordings</li>
                 <li>• <strong>GPU crop (56% FOV)</strong> - Same field of view as recordings</li>
                 <li>• <strong>Barrel correction + rotation</strong> - Same transformations as recordings</li>
                 <li>• What you see is what gets recorded</li>

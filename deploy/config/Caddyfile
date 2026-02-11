@@ -23,6 +23,11 @@
 		header Content-Disposition "attachment"
 	}
 
+	# WebSocket proxy
+	handle /ws {
+		reverse_proxy localhost:8000
+	}
+
 	# Proxy API requests to backend
 	handle /api/* {
 		reverse_proxy localhost:8000 {

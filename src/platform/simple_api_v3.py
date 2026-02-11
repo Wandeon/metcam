@@ -4,7 +4,7 @@ FootballVision Pro - API Server v3
 Uses in-process GStreamer for instant, bulletproof operations
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -13,6 +13,7 @@ from typing import Optional
 from collections import defaultdict
 from datetime import datetime
 import re
+import subprocess
 import sys
 import os
 import psutil
@@ -54,6 +55,9 @@ from dev_router import dev_router
 
 # Import panorama router
 from panorama_router import router as panorama_router
+
+# Import WebSocket manager
+from ws_manager import ws_manager
 
 app = FastAPI(
     title="FootballVision Pro API v3",
@@ -453,6 +457,327 @@ signal.signal(signal.SIGINT, signal_handler)
 
 
 # ============================================================================
+# WebSocket data getters & command handler
+# ============================================================================
+
+def _get_status_data() -> dict:
+    """Same data as GET /api/v1/status — reused by WS broadcast."""
+    recording_status = recording_service.get_status()
+    preview_status = preview_service.get_status()
+    return {
+        "recording": recording_status,
+        "preview": preview_status,
+    }
+
+
+def _get_pipeline_data() -> dict:
+    """Same data as GET /api/v1/pipeline-state."""
+    state = pipeline_manager.get_state()
+    return {
+        "mode": state.get("mode", "idle"),
+        "holder": state.get("holder"),
+        "lock_time": state.get("lock_time"),
+        "can_preview": state.get("mode") in ["idle", "preview"],
+        "can_record": state.get("mode") == "idle",
+    }
+
+
+def _collect_system_metrics() -> dict:
+    """Collect system metrics — shared by REST endpoint and WS broadcast."""
+    metrics = {}
+
+    # Power mode
+    try:
+        mode_id = "N/A"
+        mode_name = "Unknown"
+        status_file = "/var/lib/nvpmodel/status"
+        if Path(status_file).exists():
+            with open(status_file, "r") as f:
+                for line in f:
+                    if line.startswith("pmode:"):
+                        mode_id = line.split(":")[1].strip().lstrip("0")
+                        mode_names = {"0": "15W", "1": "25W", "2": "MAXN_SUPER", "3": "7W"}
+                        mode_name = mode_names.get(mode_id, f"Mode {mode_id}")
+                        break
+        metrics["power_mode"] = {"name": mode_name, "id": mode_id, "is_max": mode_id == "2"}
+    except Exception as e:
+        logger.warning(f"Failed to get power mode: {e}")
+        metrics["power_mode"] = {"name": "Unknown", "id": "N/A", "is_max": False}
+
+    # CPU frequencies
+    try:
+        cpu_freqs = []
+        for cpu in range(6):
+            freq_path = f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_cur_freq"
+            try:
+                with open(freq_path, "r") as f:
+                    freq_khz = int(f.read().strip())
+                    freq_ghz = freq_khz / 1000000.0
+                    cpu_freqs.append({"cpu": cpu, "freq_ghz": round(freq_ghz, 3), "type": "performance" if cpu < 4 else "efficiency"})
+            except Exception:
+                pass
+        metrics["cpu_frequencies"] = cpu_freqs
+        perf_cores = [c["freq_ghz"] for c in cpu_freqs if c["type"] == "performance"]
+        eff_cores = [c["freq_ghz"] for c in cpu_freqs if c["type"] == "efficiency"]
+        metrics["cpu_avg"] = {
+            "performance": round(sum(perf_cores) / len(perf_cores), 3) if perf_cores else 0,
+            "efficiency": round(sum(eff_cores) / len(eff_cores), 3) if eff_cores else 0,
+        }
+    except Exception as e:
+        logger.warning(f"Failed to get CPU frequencies: {e}")
+        metrics["cpu_frequencies"] = []
+        metrics["cpu_avg"] = {"performance": 0, "efficiency": 0}
+
+    # Temperature
+    try:
+        max_temp = 0
+        temps = []
+        for zone_path in Path("/sys/class/thermal").glob("thermal_zone*/temp"):
+            try:
+                with open(zone_path, "r") as f:
+                    temp_millic = int(f.read().strip())
+                    temp_c = temp_millic / 1000.0
+                    temps.append(round(temp_c, 1))
+                    if temp_c > max_temp:
+                        max_temp = temp_c
+            except Exception:
+                pass
+        metrics["temperature"] = {"max_c": round(max_temp, 1), "zones": temps, "warning": max_temp > 75, "critical": max_temp > 85}
+    except Exception as e:
+        logger.warning(f"Failed to get temperature: {e}")
+        metrics["temperature"] = {"max_c": 0, "zones": [], "warning": False, "critical": False}
+
+    # CPU usage
+    try:
+        env = os.environ.copy()
+        env["LC_NUMERIC"] = "C"
+        result = subprocess.run(["top", "-bn", "1"], capture_output=True, text=True, env=env)
+        for line in result.stdout.split("\n"):
+            if "Cpu(s)" in line or "%Cpu" in line:
+                parts = line.split(",")
+                for part in parts:
+                    if " id" in part:
+                        idle = float(part.split()[0])
+                        used = 100 - idle
+                        metrics["cpu_usage"] = {"overall": round(used, 1)}
+                        break
+                break
+        if "cpu_usage" not in metrics:
+            metrics["cpu_usage"] = {"overall": 0}
+    except Exception as e:
+        logger.warning(f"Failed to get CPU usage: {e}")
+        metrics["cpu_usage"] = {"overall": 0}
+
+    # Memory usage
+    try:
+        with open("/proc/meminfo", "r") as f:
+            lines = f.readlines()
+            mem_info = {}
+            for line in lines:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    key = parts[0].strip()
+                    value = int(parts[1].strip().split()[0])
+                    mem_info[key] = value
+            total = mem_info.get("MemTotal", 0) / (1024**2)
+            available = mem_info.get("MemAvailable", 0) / (1024**2)
+            used = total - available
+            metrics["memory"] = {
+                "total_gb": round(total, 2),
+                "used_gb": round(used, 2),
+                "percent": round((used / total) * 100, 1) if total > 0 else 0,
+                "available_gb": round(available, 2),
+            }
+    except Exception as e:
+        logger.warning(f"Failed to get memory usage: {e}")
+        metrics["memory"] = {"total_gb": 0, "used_gb": 0, "percent": 0, "available_gb": 0}
+
+    # Storage usage
+    try:
+        recordings_path = "/mnt/recordings"
+        if Path(recordings_path).exists():
+            stat = os.statvfs(recordings_path)
+            total = (stat.f_blocks * stat.f_frsize) / (1024**3)
+            free = (stat.f_bavail * stat.f_frsize) / (1024**3)
+            used = total - free
+            metrics["storage"] = {
+                "total_gb": round(total, 2),
+                "used_gb": round(used, 2),
+                "free_gb": round(free, 2),
+                "percent": round((used / total) * 100, 1) if total > 0 else 0,
+            }
+        else:
+            metrics["storage"] = {"total_gb": 0, "used_gb": 0, "free_gb": 0, "percent": 0}
+    except Exception as e:
+        logger.warning(f"Failed to get storage usage: {e}")
+        metrics["storage"] = {"total_gb": 0, "used_gb": 0, "free_gb": 0, "percent": 0}
+
+    return metrics
+
+
+def _get_panorama_data() -> dict:
+    """Combined panorama + calibration status for WS broadcast."""
+    try:
+        from panorama_router import panorama_service as pano_svc
+        panorama = {}
+        calibration = {}
+
+        if pano_svc:
+            try:
+                status = pano_svc.get_status()
+                panorama = status
+                # Extract calibration info from the same service
+                calibration_info = status.get("calibration_info", {})
+                progress = pano_svc.get_calibration_progress()
+                calibration = {
+                    "calibrated": status.get("calibrated", False),
+                    "is_calibrating": progress.get("is_calibrating", False),
+                    "frames_captured": progress.get("frames_captured", 0),
+                    "quality_score": calibration_info.get("quality_score"),
+                    "calibration_date": calibration_info.get("calibration_date"),
+                }
+            except Exception:
+                panorama = {"enabled": False}
+
+        return {"panorama": panorama, "calibration": calibration}
+    except Exception as e:
+        logger.warning(f"Failed to get panorama data: {e}")
+        return {"panorama": {}, "calibration": {}}
+
+
+def _handle_ws_command(action: str, params: dict) -> dict:
+    """Execute a WS command — calls the same service methods as REST endpoints."""
+    if action == "start_recording":
+        match_id = params.get("match_id")
+        if not match_id:
+            match_id = f"match_{int(datetime.now().timestamp())}"
+        force = params.get("force", False)
+        process_after = params.get("process_after_recording", False)
+
+        if not pipeline_manager.acquire_lock(PipelineMode.RECORDING, f"api-recording-{match_id}", force=True, timeout=5.0):
+            raise Exception("Could not acquire camera resources for recording")
+
+        preview_status = preview_service.get_status()
+        if preview_status.get("preview_active"):
+            try:
+                preview_service.stop_preview()
+                time.sleep(1.0)
+            except Exception:
+                pass
+
+        result = recording_service.start_recording(
+            match_id=match_id, force=force, process_after_recording=process_after
+        )
+        if result.get("success"):
+            recording_active.set(1)
+        return result
+
+    elif action == "stop_recording":
+        force = params.get("force", False)
+        current_status = recording_service.get_status()
+        match_id = current_status.get("match_id", "unknown")
+        result = recording_service.stop_recording(force=force)
+        if result.get("success"):
+            recording_active.set(0)
+            pipeline_manager.release_lock(f"api-recording-{match_id}")
+        return result
+
+    elif action == "start_preview":
+        camera_id = params.get("camera_id")
+        mode = params.get("mode")
+        if not pipeline_manager.acquire_lock(PipelineMode.PREVIEW, f"api-preview-{camera_id or 'all'}", force=False, timeout=3.0):
+            current_state = pipeline_manager.get_state()
+            if current_state.get("mode") == "recording":
+                raise Exception("Recording is active. Stop recording before starting preview.")
+            raise Exception(f"Could not acquire camera resources. Current mode: {current_state.get('mode')}")
+        kwargs = {"camera_id": camera_id}
+        if mode:
+            kwargs["mode"] = mode
+        result = preview_service.start_preview(**kwargs)
+        if result.get("success"):
+            preview_active.set(1)
+        return result
+
+    elif action == "stop_preview":
+        camera_id = params.get("camera_id")
+        result = preview_service.stop_preview(camera_id=camera_id)
+        if result.get("success"):
+            status = preview_service.get_status()
+            if not status["preview_active"]:
+                preview_active.set(0)
+                pipeline_manager.release_lock(f"api-preview-{camera_id or 'all'}")
+        return result
+
+    elif action == "get_recordings":
+        recordings_dir = Path("/mnt/recordings")
+        if not recordings_dir.exists():
+            return {"recordings": {}}
+        # Delegate to the list_recordings logic
+        return list_recordings()
+
+    elif action == "get_logs":
+        log_type = params.get("log_type", "health")
+        lines = min(params.get("lines", 200), 500)
+        log_files = {
+            "health": "/var/log/footballvision/system/health_monitor.log",
+            "alerts": "/var/log/footballvision/system/alerts.log",
+            "watchdog": "/var/log/footballvision/system/watchdog.log",
+        }
+        if log_type not in log_files:
+            raise Exception(f"Unknown log type. Available: {', '.join(log_files.keys())}")
+        log_path = Path(log_files[log_type])
+        if not log_path.exists():
+            return {"log_type": log_type, "lines": [], "message": "Log file does not exist yet"}
+        with open(log_path, "r") as f:
+            all_lines = f.readlines()
+            last_lines = all_lines[-lines:] if lines < len(all_lines) else all_lines
+        return {"log_type": log_type, "lines": [line.strip() for line in last_lines], "total_lines": len(last_lines)}
+
+    elif action == "get_panorama_processing":
+        match_id = params.get("match_id")
+        if not match_id:
+            raise Exception("match_id is required")
+        try:
+            return get_processing_status(match_id)
+        except HTTPException as e:
+            raise Exception(e.detail)
+
+    else:
+        raise Exception(f"Unknown action: {action}")
+
+
+# Wire up WS data sources
+ws_manager.set_data_sources(
+    sources={
+        "status": _get_status_data,
+        "pipeline_state": _get_pipeline_data,
+        "system_metrics": _collect_system_metrics,
+        "panorama_status": _get_panorama_data,
+    },
+    command_handler=_handle_ws_command,
+)
+
+
+@app.on_event("shutdown")
+async def shutdown_ws():
+    await ws_manager.shutdown()
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            await ws_manager.handle_message(websocket, raw)
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        ws_manager.disconnect(websocket)
+
+
+# ============================================================================
 # Prometheus metrics
 # ============================================================================
 
@@ -848,160 +1173,7 @@ def get_system_metrics():
     """Get real-time system metrics: power mode, CPU frequencies, temperature, usage"""
     api_requests.labels(endpoint='system-metrics', method='GET').inc()
     try:
-        metrics = {}
-
-        # Power mode (read from nvpmodel status file)
-        try:
-            mode_id = 'N/A'
-            mode_name = 'Unknown'
-
-            # Read from nvpmodel status file
-            status_file = '/var/lib/nvpmodel/status'
-            if Path(status_file).exists():
-                with open(status_file, 'r') as f:
-                    for line in f:
-                        if line.startswith('pmode:'):
-                            mode_id = line.split(':')[1].strip().lstrip('0')  # Remove leading zeros
-                            # Map mode IDs to names for Orin Nano Super
-                            mode_names = {
-                                '0': '15W',
-                                '1': '25W',
-                                '2': 'MAXN_SUPER',
-                                '3': '7W'
-                            }
-                            mode_name = mode_names.get(mode_id, f'Mode {mode_id}')
-                            break
-
-            metrics['power_mode'] = {
-                'name': mode_name,
-                'id': mode_id,
-                'is_max': mode_id == '2'
-            }
-        except Exception as e:
-            logger.warning(f"Failed to get power mode: {e}")
-            metrics['power_mode'] = {'name': 'Unknown', 'id': 'N/A', 'is_max': False}
-
-        # CPU frequencies
-        try:
-            cpu_freqs = []
-            for cpu in range(6):
-                freq_path = f'/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_cur_freq'
-                try:
-                    with open(freq_path, 'r') as f:
-                        freq_khz = int(f.read().strip())
-                        freq_ghz = freq_khz / 1000000.0
-                        cpu_freqs.append({
-                            'cpu': cpu,
-                            'freq_ghz': round(freq_ghz, 3),
-                            'type': 'performance' if cpu < 4 else 'efficiency'
-                        })
-                except:
-                    pass
-            metrics['cpu_frequencies'] = cpu_freqs
-            perf_cores = [c['freq_ghz'] for c in cpu_freqs if c['type'] == 'performance']
-            eff_cores = [c['freq_ghz'] for c in cpu_freqs if c['type'] == 'efficiency']
-            metrics['cpu_avg'] = {
-                'performance': round(sum(perf_cores) / len(perf_cores), 3) if perf_cores else 0,
-                'efficiency': round(sum(eff_cores) / len(eff_cores), 3) if eff_cores else 0
-            }
-        except Exception as e:
-            logger.warning(f"Failed to get CPU frequencies: {e}")
-            metrics['cpu_frequencies'] = []
-            metrics['cpu_avg'] = {'performance': 0, 'efficiency': 0}
-
-        # Temperature
-        try:
-            temps = []
-            max_temp = 0
-            for zone_path in Path('/sys/class/thermal').glob('thermal_zone*/temp'):
-                try:
-                    with open(zone_path, 'r') as f:
-                        temp_millic = int(f.read().strip())
-                        temp_c = temp_millic / 1000.0
-                        temps.append(round(temp_c, 1))
-                        if temp_c > max_temp:
-                            max_temp = temp_c
-                except:
-                    pass
-            metrics['temperature'] = {
-                'max_c': round(max_temp, 1),
-                'zones': temps,
-                'warning': max_temp > 75,
-                'critical': max_temp > 85
-            }
-        except Exception as e:
-            logger.warning(f"Failed to get temperature: {e}")
-            metrics['temperature'] = {'max_c': 0, 'zones': [], 'warning': False, 'critical': False}
-
-        # CPU usage
-        try:
-            # Copy environment and force C locale for consistent number format
-            env = os.environ.copy()
-            env['LC_NUMERIC'] = 'C'
-            result = subprocess.run(['top', '-bn', '1'], capture_output=True, text=True, env=env)
-            for line in result.stdout.split('\n'):
-                if 'Cpu(s)' in line or '%Cpu' in line:
-                    parts = line.split(',')
-                    for part in parts:
-                        if ' id' in part:  # Match ' id' specifically (idle), not 'hi' or 'si'
-                            # With LC_NUMERIC=C, we get period decimal separator
-                            idle = float(part.split()[0])
-                            used = 100 - idle
-                            metrics['cpu_usage'] = {'overall': round(used, 1)}
-                            break
-                    break
-            if 'cpu_usage' not in metrics:
-                metrics['cpu_usage'] = {'overall': 0}
-        except Exception as e:
-            logger.warning(f"Failed to get CPU usage: {e}")
-            metrics['cpu_usage'] = {'overall': 0}
-
-        # Memory usage
-        try:
-            with open('/proc/meminfo', 'r') as f:
-                lines = f.readlines()
-                mem_info = {}
-                for line in lines:
-                    parts = line.split(':')
-                    if len(parts) == 2:
-                        key = parts[0].strip()
-                        value = int(parts[1].strip().split()[0])
-                        mem_info[key] = value
-                total = mem_info.get('MemTotal', 0) / (1024**2)
-                available = mem_info.get('MemAvailable', 0) / (1024**2)
-                used = total - available
-                metrics['memory'] = {
-                    'total_gb': round(total, 2),
-                    'used_gb': round(used, 2),
-                    'percent': round((used / total) * 100, 1) if total > 0 else 0,
-                    'available_gb': round(available, 2)
-                }
-        except Exception as e:
-            logger.warning(f"Failed to get memory usage: {e}")
-            metrics['memory'] = {'total_gb': 0, 'used_gb': 0, 'percent': 0, 'available_gb': 0}
-
-        # Storage usage
-        try:
-            recordings_path = '/mnt/recordings'
-            if Path(recordings_path).exists():
-                stat = os.statvfs(recordings_path)
-                total = (stat.f_blocks * stat.f_frsize) / (1024**3)
-                free = (stat.f_bavail * stat.f_frsize) / (1024**3)
-                used = total - free
-                metrics['storage'] = {
-                    'total_gb': round(total, 2),
-                    'used_gb': round(used, 2),
-                    'free_gb': round(free, 2),
-                    'percent': round((used / total) * 100, 1) if total > 0 else 0
-                }
-            else:
-                metrics['storage'] = {'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'percent': 0}
-        except Exception as e:
-            logger.warning(f"Failed to get storage usage: {e}")
-            metrics['storage'] = {'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'percent': 0}
-
-        return metrics
-
+        return _collect_system_metrics()
     except Exception as e:
         logger.error(f"Failed to fetch system metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))

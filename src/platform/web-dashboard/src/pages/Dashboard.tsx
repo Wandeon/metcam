@@ -1,6 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { apiService, RecordingStatus } from '@/services/api';
+import { apiService, RecordingStatus, StatusResponseV3 } from '@/services/api';
+import { useWsChannel, useWsCommand } from '@/hooks/useWebSocket';
 import { Video, AlertCircle, CheckCircle, Clock, X } from 'lucide-react';
+
+// Transform raw WS/REST status data (same shape as GET /api/v1/status) to legacy RecordingStatus
+function transformStatus(raw: StatusResponseV3): RecordingStatus {
+  return {
+    status: raw.recording.recording ? 'recording' : 'idle',
+    recording: raw.recording.recording,
+    match_id: raw.recording.match_id || undefined,
+    duration_seconds: raw.recording.duration,
+    cam0_running: (raw.recording.cameras?.camera_0?.state === 'PLAYING' || raw.recording.cameras?.camera_0?.state === 'running') || false,
+    cam1_running: (raw.recording.cameras?.camera_1?.state === 'PLAYING' || raw.recording.cameras?.camera_1?.state === 'running') || false,
+  };
+}
+
+// Fetch raw StatusResponseV3 from REST (bypasses apiService transform)
+async function fetchStatusRaw(): Promise<StatusResponseV3> {
+  const response = await fetch('/api/v1/status');
+  return response.json();
+}
 
 export const Dashboard: React.FC = () => {
   const [status, setStatus] = useState<RecordingStatus | null>(null);
@@ -13,23 +32,29 @@ export const Dashboard: React.FC = () => {
   const [confirmStop, setConfirmStop] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const fetchStatus = async () => {
-    try {
-      const data = await apiService.getStatus();
-      setStatus(data);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch status');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { sendCommand, connected: wsConnected } = useWsCommand();
 
+  // WS channel + REST fallback both return StatusResponseV3 shape
+  const { data: wsStatusData } = useWsChannel<StatusResponseV3>(
+    'status',
+    fetchStatusRaw,
+    1000,
+  );
+
+  // Process incoming data (both WS and REST fallback are StatusResponseV3)
   useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 1000); // Update every 1 second
-    return () => clearInterval(interval);
+    if (wsStatusData) {
+      setLoading(false);
+      setStatus(transformStatus(wsStatusData));
+    }
+  }, [wsStatusData]);
+
+  // Initial fetch to avoid blank screen
+  useEffect(() => {
+    fetchStatusRaw().then(data => {
+      setStatus(transformStatus(data));
+      setLoading(false);
+    }).catch(() => setLoading(false));
   }, []);
 
   const handleStartRecording = async () => {
@@ -41,34 +66,32 @@ export const Dashboard: React.FC = () => {
 
     setIsStarting(true);
     try {
-      // Check if preview is running and stop it first
-      try {
-        const previewStatus = await apiService.getPreviewStatus();
-        // The streaming property is correctly set from preview_active in the API service
-        if (previewStatus.streaming) {
-          console.log('Preview is running, stopping it before starting recording...');
-          await apiService.stopPreview();
-          // Longer delay to ensure preview is fully stopped and lock is released
-          await new Promise(resolve => setTimeout(resolve, 1500));
+      if (wsConnected) {
+        await sendCommand('start_recording', {
+          match_id: matchId,
+          process_after_recording: processAfterRecording,
+        });
+      } else {
+        // REST fallback
+        try {
+          const previewStatus = await apiService.getPreviewStatus();
+          if (previewStatus.streaming) {
+            await apiService.stopPreview();
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+        } catch {
+          // Continue anyway
         }
-      } catch (previewErr) {
-        // If we can't check preview status, continue anyway
-        console.log('Could not check preview status, continuing with recording start');
+        await apiService.startRecording({
+          match_id: matchId,
+          process_after_recording: processAfterRecording,
+        });
       }
-
-      await apiService.startRecording({
-        match_id: matchId,
-        resolution: '1920x1080',
-        fps: 30,
-        bitrate_kbps: 45000,
-        process_after_recording: processAfterRecording,
-      });
-      await fetchStatus();
       setMatchId('');
       setSuccessMessage('Recording started successfully!');
       setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err) {
-      setError('Failed to start recording');
+    } catch (err: any) {
+      setError(err.message || 'Failed to start recording');
       setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
@@ -86,14 +109,21 @@ export const Dashboard: React.FC = () => {
     setIsStopping(true);
     setConfirmStop(false);
     try {
-      const result = await apiService.stopRecording();
-      await fetchStatus();
-      const durationMins = Math.floor(result.duration_seconds / 60);
-      const durationSecs = Math.round(result.duration_seconds % 60);
-      setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+      if (wsConnected) {
+        await sendCommand('stop_recording');
+        const duration = status?.duration_seconds || 0;
+        const durationMins = Math.floor(duration / 60);
+        const durationSecs = Math.round(duration % 60);
+        setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+      } else {
+        const result = await apiService.stopRecording();
+        const durationMins = Math.floor(result.duration_seconds / 60);
+        const durationSecs = Math.round(result.duration_seconds % 60);
+        setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+      }
       setTimeout(() => setSuccessMessage(null), 8000);
-    } catch (err) {
-      setError('Failed to stop recording');
+    } catch (err: any) {
+      setError(err.message || 'Failed to stop recording');
       setTimeout(() => setError(null), 5000);
       console.error(err);
     } finally {
@@ -276,8 +306,8 @@ export const Dashboard: React.FC = () => {
             <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
               <p className="font-semibold">Recording in progress</p>
               <p className="text-sm mt-1">
-                {confirmStop 
-                  ? 'Click "Stop Recording" again to confirm' 
+                {confirmStop
+                  ? 'Click "Stop Recording" again to confirm'
                   : 'Click "Stop Recording" to finalize the video segments'}
               </p>
             </div>
