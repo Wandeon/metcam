@@ -73,6 +73,22 @@ Retuned ladder validation on metcam (`ec92796`) using 20-25s dual-camera runs:
 This replaced the previously unstable behavior where `balanced` could produce
 unprobeable output and ~10 fps under stress.
 
+### Quality-Per-CPU Ladder Guardrails (Issue #39)
+
+The preset ladder is intentionally shaped for predictable quality/cost tradeoff:
+
+- `fast`: lowest encoder cost (`ultrafast`, `bframes=0`, 20 Mbps)
+- `balanced`: moderate cost (`superfast`, `bframes=1`, 22 Mbps)
+- `high`: highest quality target in this stable family (`superfast`, `bframes=1`, 25 Mbps)
+
+Operational guardrail: every ladder change must be hardware-validated on metcam with
+all of the following:
+
+1. Probeable output on both cameras.
+2. Graceful stop on both cameras.
+3. Effective fps near target for each preset.
+4. CPU usage consistent with preset intent (`fast` <= `balanced` <= `high` in sampled runs).
+
 ### GOP Tuning Validation (Issue #40, 2026-02-11)
 
 Real-device A/B runs on metcam (dual-camera, 30s recording, same workflow) were used
