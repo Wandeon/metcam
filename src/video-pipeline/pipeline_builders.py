@@ -198,7 +198,7 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             "key_int_max": 90,
             "bframes": 3,
             "b_adapt": "true",
-            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=3:rc-lookahead=30:qpmin=18:qpmax=32"
+            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=3:rc-lookahead=30:qpmin=18:qpmax=32:vbv-maxrate=25000:vbv-bufsize=50000"
         },
         "balanced": {
             "speed_preset": "fast",
@@ -208,7 +208,7 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             "key_int_max": 75,
             "bframes": 2,
             "b_adapt": "true",
-            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=2:rc-lookahead=20:qpmin=18:qpmax=32"
+            "options": "repeat-headers=1:scenecut=0:open-gop=0:ref=2:rc-lookahead=20:qpmin=18:qpmax=32:vbv-maxrate=22000:vbv-bufsize=44000"
         },
         "fast": {
             "speed_preset": "ultrafast",
@@ -218,7 +218,7 @@ def build_recording_pipeline(camera_id: int, output_pattern: str, config_path: s
             "key_int_max": 90,
             "bframes": 3,
             "b_adapt": "true",
-            "options": "repeat-headers=1:scenecut=0:open-gop=0"
+            "options": "repeat-headers=1:scenecut=0:open-gop=0:vbv-maxrate=20000:vbv-bufsize=40000"
         }
     }
 
