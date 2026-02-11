@@ -315,6 +315,46 @@ class RecordingService:
                 logger.error(f"Failed to start post-processing: {e}")
 
         return True
+
+    def check_recording_health(self) -> Dict:
+        """Check whether the active recording is producing healthy segment files."""
+        if not self.current_match_id:
+            return {"healthy": True, "message": "No active recording"}
+
+        try:
+            segments_dir = self.base_recordings_dir / self.current_match_id / "segments"
+            if not segments_dir.exists():
+                return {"healthy": False, "message": "Segments directory does not exist"}
+
+            segments = list(segments_dir.glob("*.mp4")) + list(segments_dir.glob("*.mkv"))
+            recording_age = time.time() - self.recording_start_time if self.recording_start_time else 0
+            if not segments:
+                if recording_age > 10:
+                    return {"healthy": False, "message": "No segments after 10 seconds"}
+                return {"healthy": True, "message": "Recording just started"}
+
+            issues = []
+            for cam_id in self.camera_ids:
+                cam_segments = [segment for segment in segments if f"cam{cam_id}_" in segment.name]
+                if not cam_segments:
+                    continue
+
+                latest = max(cam_segments, key=lambda path: path.stat().st_mtime)
+                size = latest.stat().st_size
+                age = time.time() - latest.stat().st_mtime
+
+                if size == 0 and age > 10:
+                    issues.append(f"cam{cam_id}: Zero-byte file")
+                elif size < 1024 * 1024 and age > 30:
+                    issues.append(f"cam{cam_id}: File too small ({size} bytes)")
+
+            if issues:
+                return {"healthy": False, "message": ", ".join(issues), "issues": issues}
+
+            return {"healthy": True, "message": "Recording healthy"}
+        except Exception as e:
+            logger.error(f"Error checking recording health: {e}")
+            return {"healthy": False, "message": f"Health check error: {e}"}
     
     def stop_recording(self, force: bool = False) -> Dict:
         """

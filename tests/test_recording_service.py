@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import time
@@ -181,7 +182,59 @@ class TestRecordingService(unittest.TestCase):
         self.assertEqual(saved["match_id"], "match_state")
         self.assertTrue(saved["process_after_recording"])
 
+    def test_check_recording_health_no_active_recording(self) -> None:
+        health = self.service.check_recording_health()
+        self.assertTrue(health["healthy"])
+        self.assertIn("No active recording", health["message"])
+
+    def test_check_recording_health_detects_missing_segments_after_grace_period(self) -> None:
+        match_id = "match_missing_segments"
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+
+        self.service.current_match_id = match_id
+        self.service.recording_start_time = time.time() - 20
+
+        health = self.service.check_recording_health()
+        self.assertFalse(health["healthy"])
+        self.assertIn("No segments after 10 seconds", health["message"])
+
+    def test_check_recording_health_detects_zero_byte_segments(self) -> None:
+        match_id = "match_zero_byte"
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+
+        cam0 = segments_dir / "cam0_test_00.mp4"
+        cam1 = segments_dir / "cam1_test_00.mp4"
+        cam0.write_bytes(b"")
+        cam1.write_bytes(b"x" * (1024 * 1024 + 1))
+
+        stale = time.time() - 20
+        os.utime(cam0, (stale, stale))
+        os.utime(cam1, (stale, stale))
+
+        self.service.current_match_id = match_id
+        self.service.recording_start_time = time.time() - 40
+
+        health = self.service.check_recording_health()
+        self.assertFalse(health["healthy"])
+        self.assertIn("cam0: Zero-byte file", health["message"])
+        self.assertIn("issues", health)
+
+    def test_check_recording_health_is_healthy_with_fresh_segments(self) -> None:
+        match_id = "match_healthy"
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "cam0_test_00.mp4").write_bytes(b"x" * 512)
+        (segments_dir / "cam1_test_00.mp4").write_bytes(b"x" * 512)
+
+        self.service.current_match_id = match_id
+        self.service.recording_start_time = time.time() - 5
+
+        health = self.service.check_recording_health()
+        self.assertTrue(health["healthy"])
+        self.assertIn("healthy", health["message"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()
-
