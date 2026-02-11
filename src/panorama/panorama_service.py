@@ -732,8 +732,8 @@ class PanoramaService:
         Capture a single frame from a camera using GStreamer
 
         Creates a one-shot GStreamer pipeline to capture a single frame from
-        the specified camera. The pipeline uses num-buffers=1 to capture just
-        one frame and then terminates.
+        the specified camera. To reduce calibration drift from startup exposure
+        swings, it captures a short warmup burst and keeps the final frame.
 
         Args:
             camera_id: Camera sensor ID (0 or 1)
@@ -748,12 +748,14 @@ class PanoramaService:
         """
         try:
             logger.info(f"Capturing single frame from camera {camera_id}...")
+            exposure_settle_frames = 60
+            total_frames = exposure_settle_frames + 1
 
             # Build one-shot GStreamer pipeline
-            # num-buffers=1 means pipeline will capture one frame and send EOS
-            # Use full sensor resolution (3840x2160) for best calibration accuracy
+            # Capture a short warmup burst and keep the last frame for better
+            # auto-exposure stability during calibration.
             pipeline_str = (
-                f"nvarguscamerasrc sensor-id={camera_id} num-buffers=1 ! "
+                f"nvarguscamerasrc sensor-id={camera_id} num-buffers={total_frames} ! "
                 f"video/x-raw(memory:NVMM),width=3840,height=2160,framerate=30/1 ! "
                 f"nvvidconv ! "
                 f"video/x-raw,format=BGRx ! "
@@ -772,19 +774,24 @@ class PanoramaService:
                 logger.error("Failed to get appsink from pipeline")
                 return None
 
-            # Variable to store captured frame
+            # Keep replacing with newest sample so we return the final frame.
             captured_frame = None
+            frame_count = 0
 
             def on_new_sample(sink):
                 """Callback when new frame is available"""
-                nonlocal captured_frame
+                nonlocal captured_frame, frame_count
                 try:
                     sample = sink.emit('pull-sample')
                     if sample:
                         frame, timestamp_ns, metadata = gst_sample_to_numpy(sample)
                         if frame is not None:
+                            frame_count += 1
                             captured_frame = frame
-                            logger.debug(f"Frame captured: {frame.shape}, timestamp={timestamp_ns}")
+                            if frame_count == total_frames:
+                                logger.debug(
+                                    f"Final warm frame captured: {frame.shape}, timestamp={timestamp_ns}"
+                                )
                         else:
                             logger.error("Failed to convert sample to numpy")
                     else:
@@ -804,9 +811,9 @@ class PanoramaService:
                 pipeline.set_state(Gst.State.NULL)
                 return None
 
-            # Wait for EOS (end of stream - single frame captured) or error
+            # Wait for EOS (after warmup burst) or error.
             bus = pipeline.get_bus()
-            timeout = 5 * Gst.SECOND  # 5 second timeout
+            timeout = 10 * Gst.SECOND
             msg = bus.timed_pop_filtered(
                 timeout,
                 Gst.MessageType.EOS | Gst.MessageType.ERROR

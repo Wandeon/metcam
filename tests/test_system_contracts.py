@@ -66,6 +66,13 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("target: 'ws://localhost:8000'", vite_source)
         self.assertIn("ws: true", vite_source)
 
+    def test_panorama_capture_uses_exposure_settle_warmup(self) -> None:
+        source = (ROOT / "src/panorama/panorama_service.py").read_text(encoding="utf-8")
+        self.assertIn("exposure_settle_frames = 60", source)
+        self.assertIn('num-buffers={total_frames}', source)
+        self.assertIn("if frame_count == total_frames", source)
+        self.assertIn("timeout = 10 * Gst.SECOND", source)
+
 
 if __name__ == "__main__":
     unittest.main()
