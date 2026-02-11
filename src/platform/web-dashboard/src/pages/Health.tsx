@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useWsChannel } from '@/hooks/useWebSocket';
 import { Activity, Cpu, Thermometer, HardDrive, MemoryStick, Zap, RefreshCw, AlertTriangle } from 'lucide-react';
 
 interface SystemMetrics {
@@ -39,15 +40,43 @@ interface SystemMetrics {
   };
 }
 
+async function fetchMetricsRest(): Promise<SystemMetrics> {
+  const response = await fetch('/api/v1/system-metrics');
+  return response.json();
+}
+
 export function Health() {
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const fetchMetrics = async () => {
+  // WS channel for system metrics with REST fallback
+  const { data: wsMetrics } = useWsChannel<SystemMetrics>(
+    'system_metrics',
+    fetchMetricsRest,
+    3000,
+  );
+
+  // Process WS data
+  useEffect(() => {
+    if (wsMetrics) {
+      setMetrics(wsMetrics);
+      setLoading(false);
+    }
+  }, [wsMetrics]);
+
+  // Initial fetch
+  useEffect(() => {
+    fetchMetricsRest().then(data => {
+      setMetrics(data);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  // Manual refresh
+  const handleRefresh = async () => {
+    setLoading(true);
     try {
-      const response = await fetch('/api/v1/system-metrics');
-      const data = await response.json();
+      const data = await fetchMetricsRest();
       setMetrics(data);
     } catch (error) {
       console.error('Failed to fetch system metrics:', error);
@@ -56,21 +85,7 @@ export function Health() {
     }
   };
 
-  useEffect(() => {
-    fetchMetrics();
-  }, []);
-
-  useEffect(() => {
-    if (!autoRefresh) return;
-
-    const interval = setInterval(() => {
-      fetchMetrics();
-    }, 2000); // Refresh every 2 seconds
-
-    return () => clearInterval(interval);
-  }, [autoRefresh]);
-
-  if (loading || !metrics) {
+  if (!metrics) {
     return (
       <div className="p-4 lg:p-8 flex items-center justify-center">
         <div className="text-gray-500">Loading system metrics...</div>
@@ -125,17 +140,8 @@ export function Health() {
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">System Health</h1>
           <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-                className="rounded"
-              />
-              Auto-refresh
-            </label>
             <button
-              onClick={() => fetchMetrics()}
+              onClick={handleRefresh}
               disabled={loading}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
@@ -180,12 +186,12 @@ export function Health() {
               <div className="text-sm text-gray-600">Mode ID: {metrics.power_mode.id}</div>
               {!metrics.power_mode.is_max && (
                 <div className="text-sm text-yellow-600 font-medium">
-                  ⚠ Not in MAXN mode
+                  Not in MAXN mode
                 </div>
               )}
               {metrics.power_mode.is_max && (
                 <div className="text-sm text-green-600 font-medium">
-                  ✓ Optimal mode
+                  Optimal mode
                 </div>
               )}
             </div>

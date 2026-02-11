@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CameraPreview } from '@/components/CameraPreview';
+import { useWsChannel, useWsCommand } from '@/hooks/useWebSocket';
 import {
   Layers,
   Camera,
@@ -178,18 +179,37 @@ export const Panorama: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState(false);
 
-  // Fetch status on mount and periodically
+  // WS channel for combined panorama + calibration status
+  const { data: wsPanoramaData } = useWsChannel<{ panorama: any; calibration: any }>(
+    'panorama_status',
+    async () => {
+      // Fallback: fetch both via REST
+      const [statusData, calData] = await Promise.all([
+        panoramaApi.getStatus().catch(() => null),
+        panoramaApi.getCalibrationStatus().catch(() => null),
+      ]);
+      return { panorama: statusData, calibration: calData } as any;
+    },
+    2000,
+  );
+
+  // Process WS panorama data
+  useEffect(() => {
+    if (wsPanoramaData) {
+      if (wsPanoramaData.panorama) {
+        setStatus(wsPanoramaData.panorama as PanoramaStatus);
+      }
+      if (wsPanoramaData.calibration) {
+        setCalibrationStatus(wsPanoramaData.calibration as CalibrationStatus);
+      }
+      setLoading(false);
+    }
+  }, [wsPanoramaData]);
+
+  // Initial fetch
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 2000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Fetch calibration status
-  useEffect(() => {
     fetchCalibrationStatus();
-    const interval = setInterval(fetchCalibrationStatus, 2000);
-    return () => clearInterval(interval);
   }, []);
 
   // Fetch matches on mount
@@ -197,13 +217,24 @@ export const Panorama: React.FC = () => {
     fetchMatches();
   }, []);
 
-  // Poll processing status when active
+  const { sendCommand, connected: wsConnected } = useWsCommand();
+
+  // Poll processing status when active (WS command with REST fallback)
   useEffect(() => {
     if (!processingMatch) return;
 
     const pollProcessing = async () => {
       try {
-        const status = await panoramaApi.getProcessingStatus(processingMatch);
+        let status: ProcessingStatus;
+        if (wsConnected) {
+          try {
+            status = await sendCommand('get_panorama_processing', { match_id: processingMatch });
+          } catch {
+            status = await panoramaApi.getProcessingStatus(processingMatch);
+          }
+        } else {
+          status = await panoramaApi.getProcessingStatus(processingMatch);
+        }
         setProcessingStatus(status);
 
         if (status.completed) {
@@ -227,7 +258,7 @@ export const Panorama: React.FC = () => {
     pollProcessing();
     const interval = setInterval(pollProcessing, 5000);
     return () => clearInterval(interval);
-  }, [processingMatch]);
+  }, [processingMatch, wsConnected]);
 
   // Sync local state with fetched status
   useEffect(() => {

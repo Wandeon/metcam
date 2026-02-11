@@ -2,7 +2,7 @@
  * Main App Component
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Dashboard } from '@/pages/Dashboard';
 import { MatchesEnhanced as Matches } from '@/pages/MatchesEnhanced';
@@ -14,12 +14,25 @@ import { Health } from '@/pages/Health';
 import { Login } from '@/pages/Login';
 import { Video, Home, Film, Eye, Code, FileText, Activity, LogOut, Menu, X, RefreshCw, Layers } from 'lucide-react';
 import { apiService } from '@/services/api';
+import { wsManager } from '@/services/websocket';
+import { useWsConnectionState } from '@/hooks/useWebSocket';
 
 function App() {
   const isAuthenticated = !!localStorage.getItem('access_token');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartMessage, setRestartMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const wsConnected = useWsConnectionState();
+
+  // WebSocket lifecycle
+  useEffect(() => {
+    if (isAuthenticated) {
+      wsManager.connect();
+    }
+    return () => {
+      wsManager.disconnect();
+    };
+  }, [isAuthenticated]);
 
   const handleRestartProduction = async () => {
     if (!window.confirm('Restart production API service? This will briefly interrupt the service.')) {
@@ -142,6 +155,19 @@ function App() {
           </div>
 
           <div className="absolute bottom-0 left-0 right-0 p-6 space-y-3">
+            <div className="flex items-center text-sm">
+              {wsConnected ? (
+                <>
+                  <div className="w-2 h-2 bg-green-400 rounded-full mr-2" />
+                  <span className="text-green-400">Live</span>
+                </>
+              ) : (
+                <>
+                  <div className="w-2 h-2 bg-yellow-400 rounded-full mr-2 animate-pulse" />
+                  <span className="text-yellow-400">Reconnecting...</span>
+                </>
+              )}
+            </div>
             {restartMessage && (
               <div className={`text-xs p-2 rounded ${
                 restartMessage.type === 'success'
