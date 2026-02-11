@@ -45,23 +45,50 @@ chmod +x deploy/install-complete.sh
 
 See **[Deployment Guide](deploy/README.md)** for detailed installation instructions.
 
+## Baseline Restore (Recording + Preview)
+
+If future development breaks recording or preview stability, restore the known-good baseline using:
+
+- **[Recording & Preview Baseline Fallback](docs/BASELINE_RECORDING_PREVIEW_FALLBACK.md)**
+
+Minimal recovery flow:
+
+```bash
+cd /home/mislav/footballvision-pro
+git stash push -u -m "pre-baseline-restore-$(date +%F-%H%M%S)" || true
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+
+sudo cp deploy/config/Caddyfile /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo caddy reload --config /etc/caddy/Caddyfile
+
+sudo systemctl daemon-reload
+sudo systemctl restart footballvision-api-enhanced
+```
+
+Baseline fingerprint:
+
+- Commit: `6cd65539a4a8e5c3d3eab8d556158b4825ad7d75`
+- Includes preview teardown hardening (non-EOS stop for preview pipelines)
+
 ## Quick Start (API)
 
 ### Start Recording
 ```bash
-curl -X POST 'http://localhost:8000/api/v1/recording/start' \
+curl -X POST 'http://localhost:8000/api/v1/recording' \
   -H 'Content-Type: application/json' \
   -d '{
     "match_id": "match_2025_01_15",
-    "duration_minutes": 90,
-    "bitrate_mbps": 12,
-    "enable_barrel_correction": false
+    "force": false,
+    "process_after_recording": false
   }'
 ```
 
 ### Stop Recording
 ```bash
-curl -X POST 'http://localhost:8000/api/v1/recording/stop'
+curl -X DELETE 'http://localhost:8000/api/v1/recording'
 ```
 
 ### Check Status
@@ -73,7 +100,7 @@ curl http://localhost:8000/api/v1/status | python3 -m json.tool
 curl http://localhost:8000/api/v1/pipeline-state | python3 -m json.tool
 
 # Recording status
-curl http://localhost:8000/api/v1/recording/status | python3 -m json.tool
+curl http://localhost:8000/api/v1/recording | python3 -m json.tool
 ```
 
 ## Architecture
@@ -137,6 +164,7 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 ### Technical Documentation
 - [Architecture Details](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
+- [Recording/Preview Baseline Fallback](docs/BASELINE_RECORDING_PREVIEW_FALLBACK.md)
 
 ## API Endpoints (v3)
 
@@ -145,20 +173,25 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 - `GET /api/v1/pipeline-state` - Current pipeline lock state (idle/preview/recording)
 
 ### Recording
-- `POST /api/v1/recording/start` - Start recording (acquires exclusive lock)
-- `POST /api/v1/recording/stop` - Stop recording (releases lock)
-- `GET /api/v1/recording/status` - Get recording status
+- `POST /api/v1/recording` - Start recording (acquires exclusive lock)
+- `DELETE /api/v1/recording` - Stop recording (releases lock)
+- `GET /api/v1/recording` - Get recording status
+- `GET /api/v1/recording-health` - Segment health diagnostics
 - `GET /api/v1/recordings` - List all recordings
 - `DELETE /api/v1/recordings/{match_id}` - Delete recording
 
 ### Preview
-- `POST /api/v1/preview/start` - Start HLS preview (fails if recording active)
-- `POST /api/v1/preview/stop` - Stop preview (releases lock)
-- `GET /api/v1/preview/status` - Get preview status
+- `POST /api/v1/preview` - Start HLS preview (fails if recording active)
+- `DELETE /api/v1/preview` - Stop preview (releases lock)
+- `POST /api/v1/preview/restart` - Restart preview pipeline(s)
+- `GET /api/v1/preview` - Get preview status
+
+### WebSocket
+- `GET /ws` (WebSocket upgrade endpoint) - Real-time status + command plane
 
 ### Recordings Access
 - Recordings served via Caddy at: `/recordings/{match_id}/`
-- HLS preview streams at: `/hls/cam1_preview.m3u8` and `/hls/cam2_preview.m3u8`
+- HLS preview streams at: `/hls/cam0.m3u8` and `/hls/cam1.m3u8`
 
 ## System Requirements
 
