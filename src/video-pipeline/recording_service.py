@@ -7,6 +7,7 @@ Uses in-process GStreamer for instant, bulletproof recording operations
 import os
 import time
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -46,6 +47,7 @@ class RecordingService:
         # Camera-level recovery and degraded-state tracking
         self.camera_recovery_state: Dict[int, Dict[str, Any]] = {}
         self.degraded_cameras: Dict[str, str] = {}
+        self.health_last_segment_snapshot: Dict[int, Dict[str, Any]] = {}
         
         # Recording protection
         self.protection_seconds = 10.0  # Don't allow stop within first 10s
@@ -93,6 +95,7 @@ class RecordingService:
             for cam_id in self.camera_ids
         }
         self.degraded_cameras = {}
+        self.health_last_segment_snapshot = {}
 
     @staticmethod
     def _build_output_pattern(match_dir: Path, cam_id: int) -> str:
@@ -640,15 +643,38 @@ class RecordingService:
 
             segments = list(segments_dir.glob("*.mp4")) + list(segments_dir.glob("*.mkv"))
             recording_age = time.time() - self.recording_start_time if self.recording_start_time else 0
+            recovery_attempts = {
+                f"camera_{cam_id}": self.camera_recovery_state.get(cam_id, {}).get("attempts", 0)
+                for cam_id in self.camera_ids
+            }
+
             if not segments:
                 if recording_age > 10:
-                    return {"healthy": False, "message": "No segments after 10 seconds"}
-                return {"healthy": True, "message": "Recording just started"}
+                    return {
+                        "healthy": False,
+                        "message": "No segments after 10 seconds",
+                        "recovery_attempts": recovery_attempts,
+                    }
+                return {
+                    "healthy": True,
+                    "message": "Recording just started",
+                    "recovery_attempts": recovery_attempts,
+                }
 
             issues = []
+            now = time.time()
             for cam_id in self.camera_ids:
+                pipeline_name = f"recording_cam{cam_id}"
+                pipeline_info = self.gst_manager.get_pipeline_status(pipeline_name)
+                if pipeline_info is None:
+                    issues.append(f"cam{cam_id}: Pipeline missing")
+                elif pipeline_info.state.value != "running":
+                    issues.append(f"cam{cam_id}: Pipeline state {pipeline_info.state.value}")
+
                 cam_segments = [segment for segment in segments if f"cam{cam_id}_" in segment.name]
                 if not cam_segments:
+                    if recording_age > 20:
+                        issues.append(f"cam{cam_id}: No segment files after 20 seconds")
                     continue
 
                 latest = max(cam_segments, key=lambda path: path.stat().st_mtime)
@@ -660,10 +686,54 @@ class RecordingService:
                 elif size < 1024 * 1024 and age > 30:
                     issues.append(f"cam{cam_id}: File too small ({size} bytes)")
 
-            if issues:
-                return {"healthy": False, "message": ", ".join(issues), "issues": issues}
+                index_match = re.search(r"_(\d+)\.(?:mp4|mkv)$", latest.name)
+                latest_index = int(index_match.group(1)) if index_match else None
+                previous = self.health_last_segment_snapshot.get(cam_id)
+                if previous:
+                    prev_index = previous.get("index")
+                    if (
+                        latest.name != previous.get("name")
+                        and latest_index is not None
+                        and prev_index is not None
+                        and latest_index < prev_index
+                    ):
+                        issues.append(
+                            f"cam{cam_id}: Segment index regressed ({latest_index} < {prev_index})"
+                        )
 
-            return {"healthy": True, "message": "Recording healthy"}
+                    if (
+                        latest.name == previous.get("name")
+                        and (now - previous.get("checked_at", now)) > 20
+                        and size <= previous.get("size", 0)
+                        and age > 20
+                    ):
+                        issues.append(f"cam{cam_id}: Segment not growing (size={size})")
+
+                self.health_last_segment_snapshot[cam_id] = {
+                    "name": latest.name,
+                    "size": size,
+                    "mtime": latest.stat().st_mtime,
+                    "index": latest_index,
+                    "checked_at": now,
+                }
+
+                recovery_state = self.camera_recovery_state.get(cam_id, {})
+                if recovery_state.get("failed_permanently"):
+                    issues.append(f"cam{cam_id}: Recovery exhausted")
+
+            if issues:
+                return {
+                    "healthy": False,
+                    "message": ", ".join(issues),
+                    "issues": issues,
+                    "recovery_attempts": recovery_attempts,
+                }
+
+            return {
+                "healthy": True,
+                "message": "Recording healthy",
+                "recovery_attempts": recovery_attempts,
+            }
         except Exception as e:
             logger.error(f"Error checking recording health: {e}")
             return {"healthy": False, "message": f"Health check error: {e}"}

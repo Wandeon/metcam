@@ -135,6 +135,10 @@ class TestRecordingService(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
+    def _mark_recording_pipelines_running(self) -> None:
+        for cam_id in self.service.camera_ids:
+            self.service.gst_manager.statuses[f"recording_cam{cam_id}"] = FakePipelineStatus(state="running")
+
     def test_start_recording_partial_camera_rolls_back_when_strict_mode_enabled(self) -> None:
         self.service.gst_manager.create_results["recording_cam1"] = False
 
@@ -322,6 +326,7 @@ class TestRecordingService(unittest.TestCase):
 
         self.service.current_match_id = match_id
         self.service.recording_start_time = time.time() - 20
+        self._mark_recording_pipelines_running()
 
         health = self.service.check_recording_health()
         self.assertFalse(health["healthy"])
@@ -343,6 +348,7 @@ class TestRecordingService(unittest.TestCase):
 
         self.service.current_match_id = match_id
         self.service.recording_start_time = time.time() - 40
+        self._mark_recording_pipelines_running()
 
         health = self.service.check_recording_health()
         self.assertFalse(health["healthy"])
@@ -358,10 +364,66 @@ class TestRecordingService(unittest.TestCase):
 
         self.service.current_match_id = match_id
         self.service.recording_start_time = time.time() - 5
+        self._mark_recording_pipelines_running()
 
         health = self.service.check_recording_health()
         self.assertTrue(health["healthy"])
         self.assertIn("healthy", health["message"].lower())
+
+    def test_check_recording_health_detects_missing_camera_segments(self) -> None:
+        match_id = "match_missing_cam1"
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "cam0_test_00.mp4").write_bytes(b"x" * (1024 * 1024 + 1))
+
+        self.service.current_match_id = match_id
+        self.service.recording_start_time = time.time() - 30
+        self._mark_recording_pipelines_running()
+
+        health = self.service.check_recording_health()
+        self.assertFalse(health["healthy"])
+        self.assertIn("cam1: No segment files after 20 seconds", health["message"])
+
+    def test_check_recording_health_detects_pipeline_state_error(self) -> None:
+        match_id = "match_pipeline_error"
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "cam0_test_00.mp4").write_bytes(b"x" * (1024 * 1024 + 1))
+        (segments_dir / "cam1_test_00.mp4").write_bytes(b"x" * (1024 * 1024 + 1))
+
+        self.service.current_match_id = match_id
+        self.service.recording_start_time = time.time() - 40
+        self._mark_recording_pipelines_running()
+        self.service.gst_manager.statuses["recording_cam0"] = FakePipelineStatus(state="error")
+
+        health = self.service.check_recording_health()
+        self.assertFalse(health["healthy"])
+        self.assertIn("cam0: Pipeline state error", health["message"])
+
+    def test_check_recording_health_detects_non_growing_segment(self) -> None:
+        match_id = "match_stalled_segment"
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        cam0 = segments_dir / "cam0_test_00.mp4"
+        cam1 = segments_dir / "cam1_test_00.mp4"
+        cam0.write_bytes(b"x" * (1024 * 1024 + 10))
+        cam1.write_bytes(b"x" * (1024 * 1024 + 10))
+        stale = time.time() - 30
+        os.utime(cam0, (stale, stale))
+        os.utime(cam1, (stale, stale))
+
+        self.service.current_match_id = match_id
+        self.service.recording_start_time = time.time() - 60
+        self._mark_recording_pipelines_running()
+
+        first = self.service.check_recording_health()
+        self.assertTrue(first["healthy"])
+        self.service.health_last_segment_snapshot[0]["checked_at"] = time.time() - 25
+        self.service.health_last_segment_snapshot[1]["checked_at"] = time.time() - 25
+
+        second = self.service.check_recording_health()
+        self.assertFalse(second["healthy"])
+        self.assertIn("cam0: Segment not growing", second["message"])
 
 
 if __name__ == "__main__":
