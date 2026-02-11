@@ -299,6 +299,17 @@ class TestRecordingService(unittest.TestCase):
         self.assertEqual(saved["match_id"], "match_state")
         self.assertTrue(saved["process_after_recording"])
 
+    def test_save_state_uses_atomic_replace_and_cleans_temp_file(self) -> None:
+        self.service.current_match_id = "match_atomic"
+        self.service.recording_start_time = time.time() - 5
+        self.service.process_after_recording = False
+
+        self.service._save_state()
+
+        self.assertTrue(self.service.state_file.exists())
+        tmp_state_file = self.service.state_file.with_name(f"{self.service.state_file.name}.tmp")
+        self.assertFalse(tmp_state_file.exists())
+
     def test_check_recording_health_no_active_recording(self) -> None:
         health = self.service.check_recording_health()
         self.assertTrue(health["healthy"])

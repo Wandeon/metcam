@@ -305,12 +305,24 @@ class RecordingService:
                 'process_after_recording': self.process_after_recording,
                 'timestamp': time.time()
             }
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_state_file = self.state_file.with_name(f"{self.state_file.name}.tmp")
 
-            with open(self.state_file, 'w') as f:
+            with open(tmp_state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(tmp_state_file, self.state_file)
 
         except Exception as e:
             logger.error(f"Failed to save recording state: {e}")
+            try:
+                tmp_state_file = self.state_file.with_name(f"{self.state_file.name}.tmp")
+                if tmp_state_file.exists():
+                    tmp_state_file.unlink()
+            except Exception:
+                pass
     
     def _clear_state(self):
         """Clear persisted state"""
