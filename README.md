@@ -165,6 +165,7 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 - [Architecture Details](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 - [Recording/Preview Baseline Fallback](docs/BASELINE_RECORDING_PREVIEW_FALLBACK.md)
+- [Recording Pipeline Parameter Baseline](docs/RECORDING_PIPELINE_PARAMETER_BASELINE.md)
 
 ## API Endpoints (v3)
 
