@@ -684,16 +684,12 @@ def _handle_ws_command(action: str, params: dict) -> dict:
 
     elif action == "start_preview":
         camera_id = params.get("camera_id")
-        mode = params.get("mode")
         if not pipeline_manager.acquire_lock(PipelineMode.PREVIEW, f"api-preview-{camera_id or 'all'}", force=False, timeout=3.0):
             current_state = pipeline_manager.get_state()
             if current_state.get("mode") == "recording":
                 raise Exception("Recording is active. Stop recording before starting preview.")
             raise Exception(f"Could not acquire camera resources. Current mode: {current_state.get('mode')}")
-        kwargs = {"camera_id": camera_id}
-        if mode:
-            kwargs["mode"] = mode
-        result = preview_service.start_preview(**kwargs)
+        result = preview_service.start_preview(camera_id=camera_id)
         if result.get("success"):
             preview_active.set(1)
         return result
