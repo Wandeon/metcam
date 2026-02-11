@@ -16,7 +16,8 @@ class TestSystemContracts(unittest.TestCase):
         )
         self.assertIsNotNone(section_match, "start_preview WS command block not found")
         body = section_match.group("body")
-        self.assertIn("preview_service.start_preview(camera_id=camera_id)", body)
+        self.assertIn("preview_service.start_preview(camera_id=camera_id, transport=transport)", body)
+        self.assertIn("transport = params.get(\"transport\")", body)
         self.assertNotIn("kwargs[\"mode\"]", body)
         self.assertNotIn("start_preview(**kwargs)", body)
 
@@ -59,6 +60,11 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("cached = self._recent_commands[cmd_id].get(\"result\")", source)
         self.assertIn("replay[\"deduplicated\"] = True", source)
         self.assertIn("\"in_progress\": True", source)
+
+    def test_webrtc_signaling_handlers_are_registered(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        self.assertIn("ws_manager.register_message_handler(_msg_type, _handle_webrtc_ws_message)", source)
+        self.assertIn("preview_service.set_webrtc_emitter(ws_manager.schedule_send_to_connection)", source)
 
     def test_system_metrics_uses_psutil_for_cpu_usage(self) -> None:
         source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")

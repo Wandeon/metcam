@@ -17,6 +17,7 @@ log_warning() { echo -e "${YELLOW}[⚠ WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[✗ FAIL]${NC} $1"; }
 
 API_URL="http://localhost:8000/api/v1"
+PREVIEW_TRANSPORT="${PREVIEW_TRANSPORT:-hls}" # hls | webrtc
 
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║      FootballVision Pro - Performance Test              ║"
@@ -34,40 +35,49 @@ echo "  JetPack: $(dpkg -l | grep nvidia-jetpack | awk '{print $3}' | head -1 ||
 echo
 
 # ============================================================================
-# Test 1: Preview HLS Performance
+# Test 1: Preview Transport Performance
 # ============================================================================
-log_info "Test 1: Preview HLS segment generation performance..."
+log_info "Test 1: Preview transport performance ($PREVIEW_TRANSPORT)..."
 
 # Stop any existing streams
 curl -s -X DELETE "$API_URL/preview" > /dev/null 2>&1 || true
 curl -s -X DELETE "$API_URL/recording?force=true" > /dev/null 2>&1 || true
 sleep 2
 
-# Clean HLS directory
+# Clean HLS directory (used only in HLS mode checks)
 sudo rm -f /dev/shm/hls/*.m3u8 /dev/shm/hls/*.ts 2>/dev/null || true
 
 # Start preview
 log_info "Starting preview stream..."
 curl -s -X POST "$API_URL/preview" \
     -H "Content-Type: application/json" \
-    -d '{}' > /dev/null
+    -d "{\"transport\":\"$PREVIEW_TRANSPORT\"}" > /dev/null
 
-# Wait for segments to generate
-log_info "Waiting 10 seconds for HLS segments..."
+# Wait for stream warmup
+log_info "Waiting 10 seconds for preview warmup..."
 sleep 10
 
-# Count segments
-CAM0_SEGMENTS=$(ls /dev/shm/hls/cam0_*.ts 2>/dev/null | wc -l)
-CAM1_SEGMENTS=$(ls /dev/shm/hls/cam1_*.ts 2>/dev/null | wc -l)
+if [ "$PREVIEW_TRANSPORT" = "hls" ]; then
+    # Count segments
+    CAM0_SEGMENTS=$(ls /dev/shm/hls/cam0_*.ts 2>/dev/null | wc -l)
+    CAM1_SEGMENTS=$(ls /dev/shm/hls/cam1_*.ts 2>/dev/null | wc -l)
 
-log_info "Camera 0: $CAM0_SEGMENTS segments generated"
-log_info "Camera 1: $CAM1_SEGMENTS segments generated"
+    log_info "Camera 0: $CAM0_SEGMENTS segments generated"
+    log_info "Camera 1: $CAM1_SEGMENTS segments generated"
 
-# Each segment is 2 seconds, so 10 seconds should produce ~5 segments
-if [ "$CAM0_SEGMENTS" -ge 4 ] && [ "$CAM1_SEGMENTS" -ge 4 ]; then
-    log_success "HLS segments generating at expected rate (~30fps)"
+    # Each segment is 2 seconds, so 10 seconds should produce ~5 segments
+    if [ "$CAM0_SEGMENTS" -ge 4 ] && [ "$CAM1_SEGMENTS" -ge 4 ]; then
+        log_success "HLS segments generating at expected rate (~30fps)"
+    else
+        log_warning "Fewer segments than expected (may indicate performance issue)"
+    fi
 else
-    log_warning "Fewer segments than expected (may indicate performance issue)"
+    PREVIEW_STATUS=$(curl -s "$API_URL/preview")
+    if echo "$PREVIEW_STATUS" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("ok" if d.get("preview_active") else "bad")' | grep -q "ok"; then
+        log_success "Preview active over transport=$PREVIEW_TRANSPORT"
+    else
+        log_warning "Preview did not report active over transport=$PREVIEW_TRANSPORT"
+    fi
 fi
 
 # Check CPU usage during preview

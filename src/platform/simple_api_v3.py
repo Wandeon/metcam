@@ -130,6 +130,7 @@ class RecordingStopRequest(BaseModel):
 
 class PreviewRequest(BaseModel):
     camera_id: Optional[int] = None  # None = both cameras
+    transport: Optional[str] = None  # hls | webrtc (optional, dual-stack)
 
 
 # ============================================================================
@@ -339,9 +340,9 @@ def get_preview_status():
 @app.post("/api/v1/preview")
 def start_preview(request: PreviewRequest):
     """
-    Start HLS preview (one or both cameras)
+    Start preview (one or both cameras)
     - Instant start
-    - HLS available at /hls/cam{0,1}.m3u8
+    - Transport selected by request.transport or PREVIEW_TRANSPORT_MODE
     """
     api_requests.labels(endpoint='preview', method='POST').inc()
     try:
@@ -362,9 +363,9 @@ def start_preview(request: PreviewRequest):
                     detail=f"Could not acquire camera resources. Current mode: {current_state.get('mode')}"
                 )
 
-        logger.info(f"Preview start requested: camera_id={request.camera_id}")
+        logger.info(f"Preview start requested: camera_id={request.camera_id}, transport={request.transport}")
         
-        result = preview_service.start_preview(camera_id=request.camera_id)
+        result = preview_service.start_preview(camera_id=request.camera_id, transport=request.transport)
         
         if result['success']:
             preview_active.set(1)
@@ -389,7 +390,7 @@ def start_preview(request: PreviewRequest):
 
 @app.delete("/api/v1/preview")
 def stop_preview(camera_id: Optional[int] = None):
-    """Stop HLS preview (one or both cameras)"""
+    """Stop preview (one or both cameras)"""
     api_requests.labels(endpoint='preview', method='DELETE').inc()
     try:
         logger.info(f"Preview stop requested: camera_id={camera_id}")
@@ -417,7 +418,7 @@ def stop_preview(camera_id: Optional[int] = None):
 
 @app.post("/api/v1/preview/restart")
 def restart_preview(request: PreviewRequest):
-    """Restart HLS preview (one or both cameras)"""
+    """Restart preview (one or both cameras)"""
     api_requests.labels(endpoint='preview_restart', method='POST').inc()
     try:
         recording_status = recording_service.get_status()
@@ -428,8 +429,8 @@ def restart_preview(request: PreviewRequest):
                 detail="Recording is active. Stop recording before restarting preview."
             )
 
-        logger.info(f"Preview restart requested: camera_id={request.camera_id}")
-        result = preview_service.restart_preview(camera_id=request.camera_id)
+        logger.info(f"Preview restart requested: camera_id={request.camera_id}, transport={request.transport}")
+        result = preview_service.restart_preview(camera_id=request.camera_id, transport=request.transport)
         return result
 
     except HTTPException:
@@ -684,12 +685,13 @@ def _handle_ws_command(action: str, params: dict) -> dict:
 
     elif action == "start_preview":
         camera_id = params.get("camera_id")
+        transport = params.get("transport")
         if not pipeline_manager.acquire_lock(PipelineMode.PREVIEW, f"api-preview-{camera_id or 'all'}", force=False, timeout=3.0):
             current_state = pipeline_manager.get_state()
             if current_state.get("mode") == "recording":
                 raise Exception("Recording is active. Stop recording before starting preview.")
             raise Exception(f"Could not acquire camera resources. Current mode: {current_state.get('mode')}")
-        result = preview_service.start_preview(camera_id=camera_id)
+        result = preview_service.start_preview(camera_id=camera_id, transport=transport)
         if result.get("success"):
             preview_active.set(1)
         return result
@@ -743,6 +745,139 @@ def _handle_ws_command(action: str, params: dict) -> dict:
         raise Exception(f"Unknown action: {action}")
 
 
+def _handle_webrtc_ws_message(websocket: WebSocket, msg: dict) -> dict:
+    """
+    Handle WebRTC signaling messages over the existing /ws transport.
+
+    Supported message types:
+    - webrtc_start
+    - webrtc_offer
+    - webrtc_ice_candidate
+    - webrtc_stop
+    """
+    msg_type = msg.get("type")
+    data = msg.get("data", {}) or {}
+    connection_id = ws_manager.get_connection_id(websocket)
+
+    if msg_type == "webrtc_start":
+        stream_kind = data.get("stream_kind")
+        if stream_kind == "panorama":
+            from panorama_router import panorama_service as pano_service
+            result = pano_service.create_webrtc_session(connection_id)
+        else:
+            result = preview_service.create_webrtc_session(connection_id, stream_kind)
+        if not result.get("success"):
+            return {
+                "v": 1,
+                "type": "webrtc_error",
+                "data": {
+                    "stream_kind": stream_kind,
+                    "error": result.get("message", "Failed to create WebRTC session"),
+                },
+            }
+        return {
+            "v": 1,
+            "type": "webrtc_session_ready",
+            "data": result,
+        }
+
+    if msg_type == "webrtc_offer":
+        session_id = data.get("session_id")
+        sdp = data.get("sdp")
+        stream_kind = data.get("stream_kind")
+        if stream_kind == "panorama":
+            from panorama_router import panorama_service as pano_service
+            result = pano_service.handle_webrtc_offer(connection_id, session_id, sdp)
+        else:
+            result = preview_service.handle_webrtc_offer(connection_id, session_id, sdp)
+        if not result.get("success"):
+            return {
+                "v": 1,
+                "type": "webrtc_error",
+                "data": {
+                    "session_id": session_id,
+                    "error": result.get("message", "Failed to process WebRTC offer"),
+                },
+            }
+        return {
+            "v": 1,
+            "type": "webrtc_answer",
+            "data": result,
+        }
+
+    if msg_type == "webrtc_ice_candidate":
+        session_id = data.get("session_id")
+        candidate = data.get("candidate")
+        sdp_mline_index = data.get("sdpMLineIndex", 0)
+        stream_kind = data.get("stream_kind")
+        if stream_kind == "panorama":
+            from panorama_router import panorama_service as pano_service
+            result = pano_service.add_webrtc_ice_candidate(
+                connection_id=connection_id,
+                session_id=session_id,
+                candidate=candidate,
+                sdp_mline_index=sdp_mline_index,
+            )
+        else:
+            result = preview_service.add_webrtc_ice_candidate(
+                connection_id=connection_id,
+                session_id=session_id,
+                candidate=candidate,
+                sdp_mline_index=sdp_mline_index,
+            )
+        if not result.get("success"):
+            return {
+                "v": 1,
+                "type": "webrtc_error",
+                "data": {
+                    "session_id": session_id,
+                    "error": result.get("message", "Failed to add ICE candidate"),
+                },
+            }
+        return {
+            "v": 1,
+            "type": "webrtc_state",
+            "data": {
+                "session_id": session_id,
+                "state": "candidate_added",
+            },
+        }
+
+    if msg_type == "webrtc_stop":
+        session_id = data.get("session_id")
+        stream_kind = data.get("stream_kind")
+        if stream_kind == "panorama":
+            from panorama_router import panorama_service as pano_service
+            result = pano_service.stop_webrtc_session(connection_id, session_id)
+        else:
+            result = preview_service.stop_webrtc_session(connection_id, session_id)
+        if not result.get("success"):
+            return {
+                "v": 1,
+                "type": "webrtc_error",
+                "data": {
+                    "session_id": session_id,
+                    "error": result.get("message", "Failed to stop WebRTC session"),
+                },
+            }
+        return {
+            "v": 1,
+            "type": "webrtc_state",
+            "data": {
+                "session_id": session_id,
+                "state": "stopped",
+            },
+        }
+
+    return {
+        "v": 1,
+        "type": "webrtc_error",
+        "data": {
+            "error": f"Unsupported WebRTC message type: {msg_type}",
+        },
+    }
+
+
 # Wire up WS data sources
 ws_manager.set_data_sources(
     sources={
@@ -754,6 +889,18 @@ ws_manager.set_data_sources(
     command_handler=_handle_ws_command,
 )
 
+# Custom signaling messages for WebRTC.
+for _msg_type in ("webrtc_start", "webrtc_offer", "webrtc_ice_candidate", "webrtc_stop"):
+    ws_manager.register_message_handler(_msg_type, _handle_webrtc_ws_message)
+
+# Allow preview service to asynchronously push ICE candidates over WS.
+preview_service.set_webrtc_emitter(ws_manager.schedule_send_to_connection)
+try:
+    from panorama_router import panorama_service as _panorama_ws_service
+    _panorama_ws_service.set_webrtc_emitter(ws_manager.schedule_send_to_connection)
+except Exception as _e:
+    logger.warning(f"Panorama WebRTC emitter setup skipped: {_e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_ws():
@@ -763,14 +910,27 @@ async def shutdown_ws():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
+    connection_id = ws_manager.get_connection_id(websocket)
     try:
         while True:
             raw = await websocket.receive_text()
             await ws_manager.handle_message(websocket, raw)
     except WebSocketDisconnect:
+        preview_service.clear_connection_sessions(connection_id)
+        try:
+            from panorama_router import panorama_service as pano_service
+            pano_service.clear_connection_sessions(connection_id)
+        except Exception:
+            pass
         ws_manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+        preview_service.clear_connection_sessions(connection_id)
+        try:
+            from panorama_router import panorama_service as pano_service
+            pano_service.clear_connection_sessions(connection_id)
+        except Exception:
+            pass
         ws_manager.disconnect(websocket)
 
 

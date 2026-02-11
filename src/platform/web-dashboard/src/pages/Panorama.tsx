@@ -22,6 +22,10 @@ import {
 
 interface PanoramaStatus {
   preview_active: boolean;
+  transport?: 'hls' | 'webrtc';
+  stream_kind?: 'panorama';
+  hls_url?: string;
+  ice_servers?: Array<{ urls: string[] }>;
   calibrated: boolean;
   calibration_date: string | null;
   quality_score: number | null;
@@ -108,6 +112,8 @@ const panoramaApi = {
   async startPreview(): Promise<void> {
     const response = await fetch('/api/v1/panorama/preview/start', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transport: 'webrtc' }),
     });
     if (!response.ok) {
       const error = await response.json();
@@ -763,10 +769,13 @@ export const Panorama: React.FC = () => {
                 {/* Preview Stream */}
                 <CameraPreview
                   cameraId={-1}
-                  streamUrl="/hls/panorama.m3u8"
+                  streamUrl={status?.hls_url || '/hls/panorama.m3u8'}
                   title="Panorama Preview"
                   resolution="3840x1315"
                   framerate={status?.performance?.current_fps || 15}
+                  transport={status?.transport || 'hls'}
+                  streamKind={(status?.stream_kind as any) || 'panorama'}
+                  iceServers={status?.ice_servers?.map((s) => ({ urls: s.urls }))}
                 />
 
                 {/* Performance Metrics */}

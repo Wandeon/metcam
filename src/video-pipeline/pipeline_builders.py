@@ -280,6 +280,45 @@ def build_preview_pipeline(camera_id: int, hls_location: str, config_path: str =
     return pipeline
 
 
+def build_preview_webrtc_pipeline(
+    camera_id: int,
+    stun_server: str = "stun://stun.l.google.com:19302",
+    turn_server: str | None = None,
+    config_path: str = None,
+) -> str:
+    """Build GStreamer pipeline string for WebRTC preview."""
+
+    config = load_camera_config(config_path)
+    cam_config = config["cameras"][str(camera_id)]
+
+    source_section, _, _ = _build_camera_source(camera_id, cam_config)
+
+    webrtc_props = []
+    if stun_server:
+        webrtc_props.append(f"stun-server={stun_server}")
+    if turn_server:
+        webrtc_props.append(f"turn-server={turn_server}")
+    webrtc_suffix = ""
+    if webrtc_props:
+        webrtc_suffix = " " + " ".join(webrtc_props)
+
+    pipeline = "".join(
+        [
+            source_section,
+            "x264enc name=enc speed-preset=ultrafast tune=zerolatency threads=0 ",
+            "bitrate=6000 key-int-max=60 b-adapt=false bframes=0 ",
+            "byte-stream=true aud=true intra-refresh=false ",
+            "option-string=repeat-headers=1:scenecut=0:open-gop=0 ! ",
+            "h264parse config-interval=1 disable-passthrough=true ! ",
+            "rtph264pay pt=96 config-interval=1 aggregate-mode=zero-latency ! ",
+            "application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000 ! ",
+            f"webrtcbin name=webrtc bundle-policy=max-bundle latency=0{webrtc_suffix}",
+        ]
+    )
+
+    return pipeline
+
+
 def build_panorama_capture_pipeline(
     camera_id: int,
     config_path: str = None
@@ -334,3 +373,36 @@ def build_panorama_capture_pipeline(
     )
 
     return pipeline
+
+
+def build_panorama_output_webrtc_pipeline(
+    width: int = 3840,
+    height: int = 1315,
+    fps: int = 15,
+    stun_server: str = "stun://stun.l.google.com:19302",
+    turn_server: str | None = None,
+) -> str:
+    """Build appsrc -> encoder -> webrtcbin pipeline for panorama output."""
+
+    webrtc_props = []
+    if stun_server:
+        webrtc_props.append(f"stun-server={stun_server}")
+    if turn_server:
+        webrtc_props.append(f"turn-server={turn_server}")
+    webrtc_suffix = ""
+    if webrtc_props:
+        webrtc_suffix = " " + " ".join(webrtc_props)
+
+    return (
+        f"appsrc name=panorama_source is-live=true do-timestamp=true format=time stream-type=stream "
+        f"caps=video/x-raw,format=I420,width={width},height={height},framerate={fps}/1 ! "
+        "videoconvert ! "
+        "x264enc name=enc speed-preset=ultrafast tune=zerolatency threads=0 "
+        "bitrate=6000 key-int-max=60 b-adapt=false bframes=0 "
+        "byte-stream=true aud=true intra-refresh=false "
+        "option-string=repeat-headers=1:scenecut=0:open-gop=0 ! "
+        "h264parse config-interval=1 disable-passthrough=true ! "
+        "rtph264pay pt=96 config-interval=1 aggregate-mode=zero-latency ! "
+        "application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000 ! "
+        f"webrtcbin name=webrtc bundle-policy=max-bundle latency=0{webrtc_suffix}"
+    )

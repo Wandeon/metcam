@@ -15,6 +15,7 @@ import { Login } from '@/pages/Login';
 import { Video, Home, Film, Eye, Code, FileText, Activity, LogOut, Menu, X, RefreshCw, Layers } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { wsManager } from '@/services/websocket';
+import { webRtcService } from '@/services/webrtc';
 import { useWsConnectionState } from '@/hooks/useWebSocket';
 
 function App() {
@@ -30,6 +31,7 @@ function App() {
       wsManager.connect();
     }
     return () => {
+      webRtcService.shutdown();
       wsManager.disconnect();
     };
   }, [isAuthenticated]);

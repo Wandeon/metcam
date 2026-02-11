@@ -16,12 +16,12 @@ Professional dual-camera recording system for football matches on NVIDIA Jetson 
 - ✅ In-process GStreamer pipelines with Python bindings
 - ✅ **System-level mutual exclusion** - recording and preview never run simultaneously
 - ✅ File-based pipeline locking with automatic recovery
-- ✅ HLS preview streaming (3Mbps) via /dev/shm
+- ✅ Dual-stack preview transport (WebRTC primary + HLS fallback)
 - ✅ High-quality recording (12Mbps x264, 10-minute segments)
 - ✅ Recording management (list, download, delete via web UI)
 - ✅ FastAPI REST API with Prometheus metrics
 - ✅ Modern React-based web dashboard
-- ✅ Caddy web server for HLS streaming and static serving
+- ✅ Caddy web server for WebSocket signaling, API, static serving, and optional HLS fallback
 - ✅ Systemd service integration with automatic startup
 
 ## Quick Deployment
@@ -141,12 +141,12 @@ splitmuxsink (10-minute segments)
 This prevents the CPU from being overwhelmed by running 4 pipelines simultaneously.
 
 ### Performance Characteristics
-- Preview HLS streaming: 30fps (both cameras @ 3Mbps)
+- Preview streaming (WebRTC): low-latency live preview (target sub-second path)
 - Recording: 25-30fps (both cameras @ 12Mbps)
 - CPU usage during recording: 250-350% (2-3 cores)
 - Recording start latency: ~500ms (including lock acquisition)
 - Recording stop latency: ~2s (graceful EOS)
-- HLS preview latency: 5-8 seconds (inherent to HLS protocol)
+- HLS fallback latency (when enabled): ~5-8 seconds
 
 ## Documentation
 
@@ -181,17 +181,17 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 - `DELETE /api/v1/recordings/{match_id}` - Delete recording
 
 ### Preview
-- `POST /api/v1/preview` - Start HLS preview (fails if recording active)
+- `POST /api/v1/preview` - Start preview (optional `transport: hls|webrtc`, fails if recording active)
 - `DELETE /api/v1/preview` - Stop preview (releases lock)
 - `POST /api/v1/preview/restart` - Restart preview pipeline(s)
 - `GET /api/v1/preview` - Get preview status
 
 ### WebSocket
-- `GET /ws` (WebSocket upgrade endpoint) - Real-time status + command plane
+- `GET /ws` (WebSocket upgrade endpoint) - Real-time status, command plane, and WebRTC signaling
 
 ### Recordings Access
 - Recordings served via Caddy at: `/recordings/{match_id}/`
-- HLS preview streams at: `/hls/cam0.m3u8` and `/hls/cam1.m3u8`
+- Optional HLS fallback streams at: `/hls/cam0.m3u8` and `/hls/cam1.m3u8`
 
 ## System Requirements
 
@@ -236,7 +236,7 @@ http://<your-jetson-ip>
 ```
 
 Features:
-- Live HLS preview from both cameras
+- Live preview from both cameras (WebRTC, with HLS fallback during dual-stack rollout)
 - Start/stop recording with match details
 - View recording status and metrics
 - Download or delete recordings

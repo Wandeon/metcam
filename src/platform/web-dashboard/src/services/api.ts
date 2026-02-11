@@ -56,20 +56,40 @@ export interface RecordingStatusV3 {
 
 export interface PreviewStatusV3 {
   preview_active: boolean;
+  transport_mode?: 'hls' | 'webrtc' | 'dual';
+  ice_servers?: Array<{ urls: string[] }>;
   cameras: {
     camera_0: {
       active: boolean;
       state: string;
       uptime: number;
       hls_url: string;
+      transport?: 'hls' | 'webrtc';
+      stream_kind?: 'main_cam0';
+      webrtc?: {
+        enabled: boolean;
+        stream_kind: 'main_cam0';
+      };
     };
     camera_1: {
       active: boolean;
       state: string;
       uptime: number;
       hls_url: string;
+      transport?: 'hls' | 'webrtc';
+      stream_kind?: 'main_cam1';
+      webrtc?: {
+        enabled: boolean;
+        stream_kind: 'main_cam1';
+      };
     };
   };
+  webrtc_streams?: Array<{
+    session_id: string;
+    stream_kind: 'main_cam0' | 'main_cam1';
+    camera_id: number;
+    connection_id: string;
+  }>;
 }
 
 export interface StatusResponseV3 {
@@ -159,6 +179,11 @@ export interface PreviewStatus {
   cam1_running?: boolean;
   cam0_url?: string;
   cam1_url?: string;
+  cam0_transport?: 'hls' | 'webrtc';
+  cam1_transport?: 'hls' | 'webrtc';
+  cam0_stream_kind?: 'main_cam0';
+  cam1_stream_kind?: 'main_cam1';
+  ice_servers?: Array<{ urls: string[] }>;
 }
 
 export interface PreviewStartResponse {
@@ -176,6 +201,7 @@ export interface PreviewStartResponse {
 export interface PreviewRequest {
   camera_id?: number | null;
   mode?: 'normal' | 'no_crop' | 'calibration';
+  transport?: 'hls' | 'webrtc';
 }
 
 // ============================================================================
@@ -304,6 +330,11 @@ export const apiService = {
         cam1_running: preview.cameras.camera_1.active,
         cam0_url: preview.cameras.camera_0.hls_url,
         cam1_url: preview.cameras.camera_1.hls_url,
+        cam0_transport: preview.cameras.camera_0.transport || 'hls',
+        cam1_transport: preview.cameras.camera_1.transport || 'hls',
+        cam0_stream_kind: preview.cameras.camera_0.stream_kind || 'main_cam0',
+        cam1_stream_kind: preview.cameras.camera_1.stream_kind || 'main_cam1',
+        ice_servers: preview.ice_servers || [],
       };
     } catch (error) {
       console.error('Failed to get preview status:', error);
@@ -317,6 +348,7 @@ export const apiService = {
   async startPreview(request?: PreviewRequest): Promise<PreviewStartResponse> {
     const response = await api.post('/preview', {
       camera_id: request?.camera_id ?? null,
+      transport: request?.transport || undefined,
     });
 
     const data = response.data;
