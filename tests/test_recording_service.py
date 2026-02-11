@@ -232,10 +232,12 @@ class TestRecordingService(unittest.TestCase):
 
         stop = self.service.stop_recording(force=False)
         self.assertTrue(stop["success"])
+        self.assertTrue(stop["transport_success"])
         self.assertTrue(stop["graceful_stop"])
         self.assertIn("camera_0", stop["camera_stop_results"])
         self.assertIn("camera_1", stop["camera_stop_results"])
         self.assertTrue(stop["camera_stop_results"]["camera_0"]["eos_received"])
+        self.assertTrue(stop["camera_stop_results"]["camera_0"]["finalized"])
         self.assertFalse(stop["camera_stop_results"]["camera_0"]["timed_out"])
 
     def test_stop_recording_timeout_reports_non_graceful_and_respects_timeout_setting(self) -> None:
@@ -246,9 +248,12 @@ class TestRecordingService(unittest.TestCase):
         self.service.gst_manager.stop_timeout_flags["recording_cam1"] = True
 
         stop = self.service.stop_recording(force=False)
-        self.assertTrue(stop["success"])
+        self.assertFalse(stop["success"])
+        self.assertTrue(stop["transport_success"])
         self.assertFalse(stop["graceful_stop"])
+        self.assertFalse(stop["camera_stop_results"]["camera_1"]["finalized"])
         self.assertTrue(stop["camera_stop_results"]["camera_1"]["timed_out"])
+        self.assertIn("finalization was incomplete", stop["message"])
         self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam0"][-1], 9.5)
         self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam1"][-1], 9.5)
 

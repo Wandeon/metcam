@@ -306,7 +306,14 @@ def stop_recording(force: bool = False):
 
         result = recording_service.stop_recording(force=force)
 
-        if result['success']:
+        status_after_stop = recording_service.get_status()
+        stop_completed = bool(
+            result.get('success')
+            or result.get('transport_success')
+            or not status_after_stop.get('recording')
+        )
+
+        if stop_completed:
             recording_active.set(0)
             # Release pipeline lock
             pipeline_manager.release_lock(f"api-recording-{match_id}")
@@ -678,7 +685,13 @@ def _handle_ws_command(action: str, params: dict) -> dict:
         current_status = recording_service.get_status()
         match_id = current_status.get("match_id", "unknown")
         result = recording_service.stop_recording(force=force)
-        if result.get("success"):
+        status_after_stop = recording_service.get_status()
+        stop_completed = bool(
+            result.get("success")
+            or result.get("transport_success")
+            or not status_after_stop.get("recording")
+        )
+        if stop_completed:
             recording_active.set(0)
             pipeline_manager.release_lock(f"api-recording-{match_id}")
         return result

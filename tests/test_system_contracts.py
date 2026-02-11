@@ -74,6 +74,32 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("holder = f\"api-preview-{camera_id or 'all'}\"", body)
         self.assertIn("pipeline_manager.release_lock(holder)", body)
 
+    def test_ws_stop_recording_releases_lock_after_transport_success(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        section_match = re.search(
+            r"elif action == \"stop_recording\":(?P<body>.*?)elif action == \"start_preview\":",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(section_match, "stop_recording WS command block not found")
+        body = section_match.group("body")
+        self.assertIn("result.get(\"transport_success\")", body)
+        self.assertIn("or not status_after_stop.get(\"recording\")", body)
+        self.assertIn("pipeline_manager.release_lock(f\"api-recording-{match_id}\")", body)
+
+    def test_rest_stop_recording_releases_lock_after_transport_success(self) -> None:
+        source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
+        section_match = re.search(
+            r"def stop_recording\(force: bool = False\):(?P<body>.*?)# ============================================================================",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(section_match, "stop_recording route block not found")
+        body = section_match.group("body")
+        self.assertIn("result.get('transport_success')", body)
+        self.assertIn("or not status_after_stop.get('recording')", body)
+        self.assertIn("pipeline_manager.release_lock(f\"api-recording-{match_id}\")", body)
+
     def test_webrtc_signaling_handlers_are_registered(self) -> None:
         source = (ROOT / "src/platform/simple_api_v3.py").read_text(encoding="utf-8")
         self.assertIn("ws_manager.register_message_handler(_msg_type, _handle_webrtc_ws_message)", source)

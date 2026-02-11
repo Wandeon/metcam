@@ -581,6 +581,12 @@ class RecordingService:
                         "timed_out": False,
                         "error": None if success else "stop_pipeline returned False",
                     }
+                details["finalized"] = bool(
+                    details.get("success")
+                    and details.get("eos_received", False)
+                    and not details.get("timed_out", False)
+                    and not details.get("error")
+                )
                 logger.info(f"Camera {cam_id} recording stopped")
                 camera_stop_results[f"camera_{cam_id}"] = details
                 # Remove pipeline from memory to allow fresh start next time
@@ -591,6 +597,7 @@ class RecordingService:
                     "success": False,
                     "eos_received": False,
                     "timed_out": False,
+                    "finalized": False,
                     "error": str(e),
                 }
         
@@ -615,18 +622,29 @@ class RecordingService:
             except Exception as e:
                 logger.error(f"Failed to start post-processing: {e}")
 
-        graceful_stop = bool(camera_stop_results) and all(
-            details.get("success") and details.get("eos_received", False)
-            for details in camera_stop_results.values()
-        )
-        success = bool(camera_stop_results) and all(
+        transport_success = bool(camera_stop_results) and all(
             details.get("success")
             for details in camera_stop_results.values()
         )
+        graceful_stop = bool(camera_stop_results) and all(
+            details.get("finalized", False)
+            for details in camera_stop_results.values()
+        )
+        success = bool(camera_stop_results) and all(
+            details.get("finalized", False)
+            for details in camera_stop_results.values()
+        )
+        if success:
+            message = "Recording stopped successfully"
+        elif transport_success:
+            message = "Recording pipelines stopped but media finalization was incomplete"
+        else:
+            message = "Recording stop completed with camera errors"
 
         return {
             "success": success,
-            "message": "Recording stopped successfully" if success else "Recording stop completed with camera errors",
+            "message": message,
+            "transport_success": transport_success,
             "graceful_stop": graceful_stop,
             "camera_stop_results": camera_stop_results,
         }
@@ -762,6 +780,7 @@ class RecordingService:
                     return {
                         'success': True,
                         'message': 'Recording stopped successfully',
+                        'transport_success': stop_result.get("transport_success", True),
                         'graceful_stop': stop_result.get("graceful_stop", False),
                         'camera_stop_results': stop_result.get("camera_stop_results", {}),
                     }
@@ -769,6 +788,7 @@ class RecordingService:
                 return {
                     'success': False,
                     'message': stop_result.get("message", "Recording stop completed with errors"),
+                    'transport_success': stop_result.get("transport_success", False),
                     'graceful_stop': stop_result.get("graceful_stop", False),
                     'camera_stop_results': stop_result.get("camera_stop_results", {}),
                 }
