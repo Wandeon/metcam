@@ -2,13 +2,21 @@
  * WebSocket Manager for FootballVision Pro
  * Single persistent connection with auto-reconnection, channel subscriptions,
  * and two-phase command responses.
+ *
+ * Resilience features:
+ * - Receive timeout: detects half-open/dead connections within 15s
+ * - Fast initial reconnect (300ms) with exponential backoff to 30s
+ * - Ping every 15s keeps proxy chains alive
  */
 
 const PROTOCOL_VERSION = 1;
-const PING_INTERVAL_MS = 25_000;
+const PING_INTERVAL_MS = 15_000;
 const COMMAND_TIMEOUT_MS = 30_000;
-const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_BASE_MS = 300;
 const RECONNECT_MAX_MS = 30_000;
+/** Force reconnect if no message received within this window. Server pushes
+ *  status every 1s, so 15s of silence means the connection is dead. */
+const RECEIVE_TIMEOUT_MS = 15_000;
 
 type MessageHandler = (data: any) => void;
 type TypedMessageHandler = (message: any) => void;
@@ -29,6 +37,7 @@ class WebSocketManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private intentionalClose = false;
+  private lastReceivedAt = 0;
 
   private channelHandlers = new Map<string, Set<MessageHandler>>();
   private typedMessageHandlers = new Map<string, Set<TypedMessageHandler>>();
@@ -176,6 +185,9 @@ class WebSocketManager {
       return;
     }
 
+    // Every received message resets the receive timeout clock.
+    this.lastReceivedAt = Date.now();
+
     const type = msg.type;
 
     if (type === 'hello') {
@@ -281,9 +293,43 @@ class WebSocketManager {
 
   private startPing(): void {
     this.stopPing();
+    this.lastReceivedAt = Date.now();
     this.pingTimer = setInterval(() => {
+      // Dead connection detection: if no message received within the timeout
+      // window, the connection is half-open. Force close and reconnect.
+      if (this.lastReceivedAt > 0 && Date.now() - this.lastReceivedAt > RECEIVE_TIMEOUT_MS) {
+        console.warn('[WS] No message received in', RECEIVE_TIMEOUT_MS / 1000, 's — forcing reconnect');
+        this.forceReconnect();
+        return;
+      }
       this.send({ v: PROTOCOL_VERSION, type: 'ping' });
     }, PING_INTERVAL_MS);
+  }
+
+  private forceReconnect(): void {
+    this.stopPing();
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.onmessage = null;
+      try { this.ws.close(); } catch { /* ignore */ }
+      this.ws = null;
+    }
+    const wasConnected = this.connected;
+    this.connected = false;
+    this.ready = false;
+    if (wasConnected) {
+      this.notifyConnectionChange(false);
+    }
+    // Reject pending commands
+    for (const pending of this.pendingCommands.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('WebSocket receive timeout'));
+    }
+    this.pendingCommands.clear();
+    // Reconnect immediately (don't wait for backoff)
+    this.reconnectDelay = RECONNECT_BASE_MS;
+    this.scheduleReconnect();
   }
 
   private stopPing(): void {
