@@ -127,6 +127,9 @@ Notes:
 - If within protection window, call with `force=true`.
 - `success=true` means all camera outputs finalized cleanly.
 - `transport_success=true` means stop commands reached/closed pipelines, even if finalization was incomplete.
+- `integrity` includes post-stop segment probe outcomes per camera.
+- If finalization succeeds but integrity fails, response returns `success=false` with
+  message `Recording pipelines stopped but integrity checks failed`.
 
 Example success response:
 ```json
@@ -141,14 +144,43 @@ Example success response:
       "eos_received": true,
       "finalized": true,
       "timed_out": false,
-      "error": null
+      "error": null,
+      "segment_path": "/mnt/recordings/match_20260211_001/segments/cam0_20260211_220241_00.mp4",
+      "integrity_checked": true,
+      "integrity_ok": true,
+      "integrity_error": null
     },
     "camera_1": {
       "success": true,
       "eos_received": true,
       "finalized": true,
       "timed_out": false,
-      "error": null
+      "error": null,
+      "segment_path": "/mnt/recordings/match_20260211_001/segments/cam1_20260211_220241_00.mp4",
+      "integrity_checked": true,
+      "integrity_ok": true,
+      "integrity_error": null
+    }
+  },
+  "integrity": {
+    "checked": true,
+    "all_ok": true,
+    "reason": null,
+    "cameras": {
+      "camera_0": {
+        "segment_found": true,
+        "segment_path": "/mnt/recordings/match_20260211_001/segments/cam0_20260211_220241_00.mp4",
+        "integrity_checked": true,
+        "integrity_ok": true,
+        "integrity_error": null
+      },
+      "camera_1": {
+        "segment_found": true,
+        "segment_path": "/mnt/recordings/match_20260211_001/segments/cam1_20260211_220241_00.mp4",
+        "integrity_checked": true,
+        "integrity_ok": true,
+        "integrity_error": null
+      }
     }
   }
 }

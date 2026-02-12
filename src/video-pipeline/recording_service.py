@@ -254,6 +254,66 @@ class RecordingService:
         _prune_probe_cache()
         return result
 
+    def _collect_stop_integrity(self, match_id: str) -> Dict[str, Any]:
+        """Collect per-camera segment integrity immediately after recording stop."""
+        result: Dict[str, Any] = {
+            "checked": False,
+            "all_ok": None,
+            "reason": None,
+            "cameras": {},
+        }
+        segments_dir = self.base_recordings_dir / match_id / "segments"
+        if not segments_dir.exists():
+            result["reason"] = "segments_dir_missing"
+            return result
+
+        now = time.time()
+        any_segments = False
+        all_checked = True
+        all_ok = True
+
+        for cam_id in self.camera_ids:
+            camera_key = f"camera_{cam_id}"
+            cam_segments = list(segments_dir.glob(f"cam{cam_id}_*.mp4")) + list(segments_dir.glob(f"cam{cam_id}_*.mkv"))
+            if not cam_segments:
+                result["cameras"][camera_key] = {
+                    "segment_found": False,
+                    "segment_path": None,
+                    "integrity_checked": True,
+                    "integrity_ok": False,
+                    "integrity_error": "segment_not_found",
+                }
+                all_ok = False
+                continue
+
+            any_segments = True
+            latest = max(cam_segments, key=lambda path: path.stat().st_mtime)
+            probe_result = self._probe_segment_integrity(latest, now)
+            checked = bool(probe_result.get("checked"))
+            ok_value = bool(probe_result.get("ok")) if checked else None
+            if not checked:
+                all_checked = False
+            elif not ok_value:
+                all_ok = False
+
+            result["cameras"][camera_key] = {
+                "segment_found": True,
+                "segment_path": str(latest),
+                "segment_size": latest.stat().st_size,
+                "integrity_checked": checked,
+                "integrity_ok": ok_value,
+                "integrity_error": probe_result.get("error"),
+                "probe": probe_result,
+            }
+
+        if not any_segments:
+            result["reason"] = "no_segments_found"
+            return result
+
+        result["checked"] = all_checked
+        result["all_ok"] = all_ok if all_checked else None
+        return result
+
     def _handle_pipeline_error(self, camera_id: int, match_id: str, error: Any, debug: Any):
         """Schedule bounded camera pipeline recovery after an asynchronous pipeline error."""
         error_message = str(error)
@@ -746,6 +806,15 @@ class RecordingService:
         # Trigger post-processing if enabled
         should_process = self.process_after_recording
         match_id_for_processing = self.current_match_id
+        stop_integrity = self._collect_stop_integrity(match_id_for_processing)
+        for camera_key, camera_integrity in stop_integrity.get("cameras", {}).items():
+            if camera_key not in camera_stop_results:
+                continue
+            details = camera_stop_results[camera_key]
+            details["segment_path"] = camera_integrity.get("segment_path")
+            details["integrity_checked"] = camera_integrity.get("integrity_checked")
+            details["integrity_ok"] = camera_integrity.get("integrity_ok")
+            details["integrity_error"] = camera_integrity.get("integrity_error")
 
         # Clear state
         self.current_match_id = None
@@ -776,8 +845,13 @@ class RecordingService:
             details.get("finalized", False)
             for details in camera_stop_results.values()
         )
+        integrity_gate_failed = stop_integrity.get("all_ok") is False
+        if success and integrity_gate_failed:
+            success = False
         if success:
             message = "Recording stopped successfully"
+        elif integrity_gate_failed:
+            message = "Recording pipelines stopped but integrity checks failed"
         elif transport_success:
             message = "Recording pipelines stopped but media finalization was incomplete"
         else:
@@ -789,6 +863,7 @@ class RecordingService:
             "transport_success": transport_success,
             "graceful_stop": graceful_stop,
             "camera_stop_results": camera_stop_results,
+            "integrity": stop_integrity,
         }
 
     def check_recording_health(self) -> Dict:
@@ -948,22 +1023,13 @@ class RecordingService:
             
             try:
                 stop_result = self._stop_recording_internal(force=force)
-
-                if stop_result.get("success"):
-                    return {
-                        'success': True,
-                        'message': 'Recording stopped successfully',
-                        'transport_success': stop_result.get("transport_success", True),
-                        'graceful_stop': stop_result.get("graceful_stop", False),
-                        'camera_stop_results': stop_result.get("camera_stop_results", {}),
-                    }
-
                 return {
-                    'success': False,
+                    'success': bool(stop_result.get("success")),
                     'message': stop_result.get("message", "Recording stop completed with errors"),
-                    'transport_success': stop_result.get("transport_success", False),
+                    'transport_success': stop_result.get("transport_success", bool(stop_result.get("success"))),
                     'graceful_stop': stop_result.get("graceful_stop", False),
                     'camera_stop_results': stop_result.get("camera_stop_results", {}),
+                    'integrity': stop_result.get("integrity"),
                 }
                 
             except ValueError as e:
