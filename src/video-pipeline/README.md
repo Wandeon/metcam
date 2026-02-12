@@ -88,6 +88,10 @@ Top-level recording policy keys in `config/camera_config.json`:
 - `recording_recovery_backoff_seconds` - linear recovery backoff base.
 - `recording_stop_eos_timeout_seconds` - EOS wait time before forced stop.
 - `recording_integrity_probe_timeout_seconds` - ffprobe timeout used for post-stop segment integrity checks.
+- `recording_overload_guard_enabled` - enables runtime overload monitor during active recording.
+- `recording_overload_cpu_percent_threshold` - CPU threshold considered overloaded.
+- `recording_overload_poll_interval_seconds` - monitor sampling interval.
+- `recording_overload_unhealthy_streak_threshold` - sustained unhealthy samples required before guard triggers.
 
 Integrity checks intentionally use metadata-level ffprobe (not full frame counting) to avoid stop-path false failures on large segments.
 

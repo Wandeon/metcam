@@ -42,7 +42,13 @@ Example response:
     "cameras": {},
     "degraded": false,
     "degraded_cameras": {},
-    "camera_recovery": {}
+    "camera_recovery": {},
+    "overload_guard": {
+      "active": false,
+      "unhealthy_streak": 0,
+      "cpu_percent": null,
+      "reasons": []
+    }
   },
   "preview": {
     "preview_active": false,
@@ -220,6 +226,7 @@ Notes:
 - `camera_diagnostics` is always returned for active recordings.
 - `integrity_probe.checked=true` appears only when a segment is large and stable enough to probe safely.
 - If probing fails, health is reported as unhealthy with a `Segment probe failed (...)` issue.
+- Runtime overload guard state is surfaced in `GET /api/v1/status` under `recording.overload_guard`.
 
 ### Preview
 
