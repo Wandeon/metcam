@@ -239,6 +239,8 @@ class TestRecordingService(unittest.TestCase):
         self.assertTrue(stop["camera_stop_results"]["camera_0"]["eos_received"])
         self.assertTrue(stop["camera_stop_results"]["camera_0"]["finalized"])
         self.assertFalse(stop["camera_stop_results"]["camera_0"]["timed_out"])
+        self.assertIn("integrity", stop)
+        self.assertIn("cameras", stop["integrity"])
 
     def test_stop_recording_timeout_reports_non_graceful_and_respects_timeout_setting(self) -> None:
         self.service.stop_eos_timeout_seconds = 9.5
@@ -256,6 +258,58 @@ class TestRecordingService(unittest.TestCase):
         self.assertIn("finalization was incomplete", stop["message"])
         self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam0"][-1], 9.5)
         self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam1"][-1], 9.5)
+
+    def test_stop_recording_integrity_gate_marks_failure_on_probe_error(self) -> None:
+        match_id = "match_integrity_fail"
+        start = self.service.start_recording(match_id, process_after_recording=False)
+        self.assertTrue(start["success"])
+        self.service.recording_start_time = time.time() - 20
+
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "cam0_20260212_000000_00.mp4").write_bytes(b"cam0")
+        (segments_dir / "cam1_20260212_000000_00.mp4").write_bytes(b"cam1")
+
+        def probe(path: Path, now: float) -> dict:
+            if "cam0_" in path.name:
+                return {"checked": True, "ok": False, "error": "moov atom not found", "cached": False}
+            return {"checked": True, "ok": True, "error": None, "cached": False}
+
+        self.service._probe_segment_integrity = probe  # type: ignore[method-assign]
+
+        stop = self.service.stop_recording(force=False)
+        self.assertFalse(stop["success"])
+        self.assertTrue(stop["transport_success"])
+        self.assertTrue(stop["graceful_stop"])
+        self.assertIn("integrity checks failed", stop["message"])
+        self.assertFalse(stop["integrity"]["all_ok"])
+        self.assertFalse(stop["camera_stop_results"]["camera_0"]["integrity_ok"])
+        self.assertEqual(stop["camera_stop_results"]["camera_0"]["integrity_error"], "moov atom not found")
+
+    def test_stop_recording_integrity_gate_passes_when_all_probes_ok(self) -> None:
+        match_id = "match_integrity_ok"
+        start = self.service.start_recording(match_id, process_after_recording=False)
+        self.assertTrue(start["success"])
+        self.service.recording_start_time = time.time() - 20
+
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "cam0_20260212_000000_00.mp4").write_bytes(b"cam0")
+        (segments_dir / "cam1_20260212_000000_00.mp4").write_bytes(b"cam1")
+
+        self.service._probe_segment_integrity = lambda path, now: {  # type: ignore[method-assign]
+            "checked": True,
+            "ok": True,
+            "error": None,
+            "cached": False,
+        }
+
+        stop = self.service.stop_recording(force=False)
+        self.assertTrue(stop["success"])
+        self.assertTrue(stop["integrity"]["checked"])
+        self.assertTrue(stop["integrity"]["all_ok"])
+        self.assertTrue(stop["camera_stop_results"]["camera_0"]["integrity_ok"])
+        self.assertTrue(stop["camera_stop_results"]["camera_1"]["integrity_ok"])
 
     def test_stop_recording_triggers_post_processing_when_enabled(self) -> None:
         calls: list[str] = []
