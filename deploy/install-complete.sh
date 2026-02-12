@@ -181,6 +181,8 @@ log_info "Step 10/10: Installing API service..."
 sudo cp "$REPO_DIR/deploy/systemd/footballvision-api-enhanced.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable footballvision-api-enhanced
+# Clear any prior start-limit failure state before restart.
+sudo systemctl reset-failed footballvision-api-enhanced || true
 sudo systemctl restart footballvision-api-enhanced
 
 # Wait for service to start

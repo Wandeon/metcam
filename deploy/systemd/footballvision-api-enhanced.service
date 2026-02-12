@@ -5,6 +5,9 @@ Wants=network-online.target
 # Ensure we start after critical services
 After=systemd-resolved.service
 After=NetworkManager.service
+# Avoid start-limit lockouts during frequent deploy/restart operations.
+StartLimitIntervalSec=120
+StartLimitBurst=30
 
 [Service]
 Type=simple
@@ -22,26 +25,25 @@ ExecStart=/usr/bin/python3 /home/mislav/footballvision-pro/src/platform/simple_a
 
 # Pre-start actions
 ExecStartPre=/bin/bash -c 'mkdir -p /var/log/footballvision/{api,system,crashes}'
-ExecStartPre=/bin/bash -c 'nvpmodel -m 1'  # Ensure 25W mode
+ExecStartPre=/bin/bash -c 'nvpmodel -m 1'
 ExecStartPre=/bin/bash -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor'
 
 # Post-start recovery check
-ExecStartPost=/bin/bash /home/mislav/footballvision-pro/scripts/power_loss_recovery.sh
+# Recovery check must not fail service startup.
+ExecStartPost=-/bin/bash /home/mislav/footballvision-pro/scripts/power_loss_recovery.sh
 
 # Restart policy - aggressive but with backoff
 Restart=always
-RestartSec=10
-StartLimitInterval=300  # Reset failure count after 5 minutes
-StartLimitBurst=5       # Allow 5 restarts in that interval
+RestartSec=5
 
 # Kill settings - graceful shutdown for recordings
 KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=30  # Give time to stop recordings properly
+TimeoutStopSec=30
 
 # Resource limits
-LimitNOFILE=65536  # Increase file descriptor limit
-Nice=-5            # Slight priority boost
+LimitNOFILE=65536
+Nice=-5
 
 # Logging
 StandardOutput=append:/var/log/footballvision/api/service.log

@@ -22,6 +22,7 @@ sudo cp /home/mislav/footballvision-pro/deploy/systemd/footballvision-api-enhanc
     /etc/systemd/system/footballvision-api-enhanced.service
 sudo systemctl daemon-reload
 sudo systemctl enable footballvision-api-enhanced
+sudo systemctl reset-failed footballvision-api-enhanced || true
 
 # 4. Setup cron jobs for monitoring
 echo "Setting up cron jobs..."
