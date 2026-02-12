@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 
 from gstreamer_manager import GStreamerManager
 from pipeline_builders import build_recording_pipeline, load_camera_config
@@ -40,6 +40,11 @@ class RecordingService:
         self.recovery_backoff_seconds = 1.0
         self.stop_eos_timeout_seconds = 5.0
         self.integrity_probe_timeout_seconds = 8.0
+        self.overload_guard_enabled = True
+        self.overload_guard_cpu_percent_threshold = 92.0
+        self.overload_guard_poll_interval_seconds = 5.0
+        self.overload_guard_unhealthy_streak_threshold = 3
+        self.overload_guard_unhealthy_streak = 0
 
         # Recording state
         self.current_match_id: Optional[str] = None
@@ -55,6 +60,9 @@ class RecordingService:
         self.health_probe_cache_ttl_seconds = 10.0
         self.health_probe_min_size_bytes = 4 * 1024 * 1024  # Probe only larger/stable segments.
         self.health_probe_min_stable_age_seconds = 10.0
+        self.overload_guard_state: Dict[str, Any] = {}
+        self._overload_monitor_stop_event = Event()
+        self._overload_monitor_thread: Optional[Thread] = None
         
         # Recording protection
         self.protection_seconds = 10.0  # Don't allow stop within first 10s
@@ -83,6 +91,19 @@ class RecordingService:
                 1.0,
                 float(config.get('recording_integrity_probe_timeout_seconds', 8.0)),
             )
+            self.overload_guard_enabled = bool(config.get('recording_overload_guard_enabled', True))
+            self.overload_guard_cpu_percent_threshold = max(
+                1.0,
+                min(100.0, float(config.get('recording_overload_cpu_percent_threshold', 92.0))),
+            )
+            self.overload_guard_poll_interval_seconds = max(
+                1.0,
+                float(config.get('recording_overload_poll_interval_seconds', 5.0)),
+            )
+            self.overload_guard_unhealthy_streak_threshold = max(
+                1,
+                int(config.get('recording_overload_unhealthy_streak_threshold', 3)),
+            )
         except Exception as e:
             logger.warning(
                 "Failed to load recording policy from config: %s. Using defaults.",
@@ -93,6 +114,11 @@ class RecordingService:
             self.recovery_backoff_seconds = 1.0
             self.stop_eos_timeout_seconds = 5.0
             self.integrity_probe_timeout_seconds = 8.0
+            self.overload_guard_enabled = True
+            self.overload_guard_cpu_percent_threshold = 92.0
+            self.overload_guard_poll_interval_seconds = 5.0
+            self.overload_guard_unhealthy_streak_threshold = 3
+        self.overload_guard_unhealthy_streak = 0
 
     def _init_recovery_state(self):
         """Reset per-camera recovery state for the current recording session."""
@@ -109,6 +135,115 @@ class RecordingService:
         self.degraded_cameras = {}
         self.health_last_segment_snapshot = {}
         self.health_probe_cache = {}
+        self.overload_guard_unhealthy_streak = 0
+        self.overload_guard_state = {
+            "active": False,
+            "triggered_at": None,
+            "last_evaluated_at": None,
+            "unhealthy_streak": 0,
+            "cpu_percent": None,
+            "reasons": [],
+            "health_healthy": None,
+            "health_message": None,
+        }
+
+    @staticmethod
+    def _read_cpu_percent() -> Optional[float]:
+        """Best-effort CPU usage sample for overload guard logic."""
+        try:
+            import psutil  # Lazy import keeps tests lightweight.
+
+            return float(psutil.cpu_percent(interval=None))
+        except Exception:
+            return None
+
+    def _ingest_overload_sample(self, cpu_percent: Optional[float], health: Dict[str, Any], now: float) -> Dict[str, Any]:
+        """
+        Update overload guard state from one runtime sample.
+        Mitigation is intentionally non-destructive by default: mark degraded and surface diagnostics.
+        """
+        reasons: list[str] = []
+        if cpu_percent is not None and cpu_percent >= self.overload_guard_cpu_percent_threshold:
+            reasons.append(
+                f"cpu {cpu_percent:.1f}% >= {self.overload_guard_cpu_percent_threshold:.1f}% threshold"
+            )
+
+        healthy = bool(health.get("healthy", True))
+        if not healthy:
+            issues = health.get("issues")
+            if isinstance(issues, list) and issues:
+                reasons.extend(str(item) for item in issues[:3])
+            else:
+                reasons.append(str(health.get("message", "recording unhealthy")))
+
+        was_active = bool(self.overload_guard_state.get("active"))
+        self.overload_guard_state["last_evaluated_at"] = now
+        self.overload_guard_state["cpu_percent"] = cpu_percent
+        self.overload_guard_state["health_healthy"] = healthy
+        self.overload_guard_state["health_message"] = health.get("message")
+        self.overload_guard_state["reasons"] = reasons
+
+        if reasons:
+            self.overload_guard_unhealthy_streak += 1
+        else:
+            self.overload_guard_unhealthy_streak = 0
+
+        self.overload_guard_state["unhealthy_streak"] = self.overload_guard_unhealthy_streak
+        active_now = self.overload_guard_unhealthy_streak >= self.overload_guard_unhealthy_streak_threshold
+        self.overload_guard_state["active"] = active_now
+
+        if active_now:
+            if self.overload_guard_state.get("triggered_at") is None:
+                self.overload_guard_state["triggered_at"] = now
+            if reasons:
+                self.degraded_cameras["overload_guard"] = "; ".join(reasons)
+        else:
+            self.overload_guard_state["triggered_at"] = None
+            self.degraded_cameras.pop("overload_guard", None)
+
+        if active_now and not was_active:
+            logger.error(
+                "Recording overload guard triggered: streak=%s threshold=%s reasons=%s",
+                self.overload_guard_unhealthy_streak,
+                self.overload_guard_unhealthy_streak_threshold,
+                reasons,
+            )
+        elif was_active and not active_now:
+            logger.info("Recording overload guard cleared after healthy sample")
+
+        return dict(self.overload_guard_state)
+
+    def _overload_guard_loop(self, match_id: str) -> None:
+        """Background monitor that converts sustained unhealthy runtime into explicit degraded state."""
+        interval = max(1.0, float(self.overload_guard_poll_interval_seconds))
+        while not self._overload_monitor_stop_event.wait(interval):
+            with self.state_lock:
+                if self.current_match_id != match_id:
+                    return
+            cpu_percent = self._read_cpu_percent()
+            health = self.check_recording_health()
+            now = time.time()
+            with self.state_lock:
+                if self.current_match_id != match_id:
+                    return
+                self._ingest_overload_sample(cpu_percent, health, now)
+
+    def _start_overload_guard(self, match_id: str) -> None:
+        if not self.overload_guard_enabled:
+            return
+        self._stop_overload_guard()
+        self._overload_monitor_stop_event.clear()
+        self._overload_monitor_thread = Thread(
+            target=self._overload_guard_loop,
+            args=(match_id,),
+            name=f"recording-overload-{match_id}",
+            daemon=True,
+        )
+        self._overload_monitor_thread.start()
+
+    def _stop_overload_guard(self) -> None:
+        self._overload_monitor_stop_event.set()
+        self._overload_monitor_thread = None
 
     @staticmethod
     def _build_output_pattern(match_dir: Path, cam_id: int) -> str:
@@ -556,6 +691,7 @@ class RecordingService:
                     'degraded': False,
                     'degraded_cameras': {},
                     'camera_recovery': {},
+                    'overload_guard': dict(self.overload_guard_state),
                 }
             
             # Calculate duration
@@ -594,6 +730,7 @@ class RecordingService:
                 'degraded': bool(self.degraded_cameras),
                 'degraded_cameras': self.degraded_cameras.copy(),
                 'camera_recovery': camera_recovery,
+                'overload_guard': dict(self.overload_guard_state),
             }
     
     def start_recording(self, match_id: str, force: bool = False, process_after_recording: bool = False) -> Dict:
@@ -723,6 +860,9 @@ class RecordingService:
 
             # Persist state
             self._save_state()
+
+            # Start overload guard after successful state transition.
+            self._start_overload_guard(match_id)
             
             return {
                 'success': True,
@@ -761,6 +901,8 @@ class RecordingService:
                 )
         
         logger.info(f"Stopping recording for match: {self.current_match_id}")
+
+        self._stop_overload_guard()
 
         # Stop both cameras
         camera_stop_results = {}
@@ -1057,6 +1199,7 @@ class RecordingService:
         if self.current_match_id:
             logger.warning(f"Stopping active recording during cleanup: {self.current_match_id}")
             self._stop_recording_internal(force=True)
+        self._stop_overload_guard()
 
 
 # Global instance

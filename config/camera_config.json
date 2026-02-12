@@ -13,6 +13,14 @@
   "_recording_stop_eos_timeout_seconds_comment": "Seconds to wait for EOS when stopping recording before forcing NULL state.",
   "recording_integrity_probe_timeout_seconds": 8.0,
   "_recording_integrity_probe_timeout_seconds_comment": "Timeout for ffprobe metadata validation used by stop/integrity checks. Metadata-only probe avoids full frame counting overhead.",
+  "recording_overload_guard_enabled": true,
+  "_recording_overload_guard_enabled_comment": "If true, runtime monitor marks recording degraded when sustained overload/unhealthy signals are detected.",
+  "recording_overload_cpu_percent_threshold": 92.0,
+  "_recording_overload_cpu_percent_threshold_comment": "CPU percent threshold used by overload guard samples.",
+  "recording_overload_poll_interval_seconds": 5.0,
+  "_recording_overload_poll_interval_seconds_comment": "Seconds between overload guard runtime samples during active recording.",
+  "recording_overload_unhealthy_streak_threshold": 3,
+  "_recording_overload_unhealthy_streak_threshold_comment": "Consecutive unhealthy/overload samples required before overload guard activates.",
   "cameras": {
     "0": {
       "rotation": 0.0,

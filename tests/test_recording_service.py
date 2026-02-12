@@ -130,10 +130,15 @@ class TestRecordingService(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.service = self.module.RecordingService(base_recordings_dir=self.temp_dir.name)
         self.service.gst_manager = FakeGStreamerManager()
+        self.service.overload_guard_enabled = False
         self.service.state_file = Path(self.temp_dir.name) / "recording_state.json"
         self.service._clear_state()
 
     def tearDown(self) -> None:
+        try:
+            self.service._stop_overload_guard()  # type: ignore[attr-defined]
+        except Exception:
+            pass
         self.temp_dir.cleanup()
 
     def _mark_recording_pipelines_running(self) -> None:
@@ -224,6 +229,22 @@ class TestRecordingService(unittest.TestCase):
 
         self.assertEqual(self.service.integrity_probe_timeout_seconds, 11.25)
 
+    def test_load_recording_policy_reads_overload_guard_thresholds(self) -> None:
+        self.module.load_camera_config = lambda config_path=None: {  # type: ignore[assignment]
+            "recording_quality": "high",
+            "recording_overload_guard_enabled": True,
+            "recording_overload_cpu_percent_threshold": 88.5,
+            "recording_overload_poll_interval_seconds": 4.0,
+            "recording_overload_unhealthy_streak_threshold": 5,
+        }
+
+        self.service._load_recording_policy()
+
+        self.assertTrue(self.service.overload_guard_enabled)
+        self.assertEqual(self.service.overload_guard_cpu_percent_threshold, 88.5)
+        self.assertEqual(self.service.overload_guard_poll_interval_seconds, 4.0)
+        self.assertEqual(self.service.overload_guard_unhealthy_streak_threshold, 5)
+
     def test_probe_segment_integrity_uses_metadata_probe_and_configured_timeout(self) -> None:
         segment = Path(self.temp_dir.name) / "probe_target.mp4"
         segment.write_bytes(b"probe-bytes")
@@ -248,6 +269,53 @@ class TestRecordingService(unittest.TestCase):
         self.assertTrue(result["checked"])
         self.assertTrue(result["ok"])
         self.assertNotIn("nb_read_frames", result)
+
+    def test_overload_guard_triggers_after_sustained_unhealthy_samples(self) -> None:
+        self.service.overload_guard_unhealthy_streak_threshold = 2
+        self.service.overload_guard_cpu_percent_threshold = 90.0
+
+        first = self.service._ingest_overload_sample(
+            95.0,
+            {"healthy": False, "issues": ["cam0: Segment not growing"], "message": "cam0 unhealthy"},
+            now=time.time(),
+        )
+        self.assertFalse(first["active"])
+        self.assertEqual(first["unhealthy_streak"], 1)
+
+        second = self.service._ingest_overload_sample(
+            94.0,
+            {"healthy": False, "issues": ["cam0: Segment not growing"], "message": "cam0 unhealthy"},
+            now=time.time() + 1.0,
+        )
+        self.assertTrue(second["active"])
+        self.assertEqual(second["unhealthy_streak"], 2)
+        self.assertIn("overload_guard", self.service.degraded_cameras)
+
+    def test_overload_guard_clears_after_healthy_sample(self) -> None:
+        self.service.overload_guard_unhealthy_streak_threshold = 1
+        self.service.overload_guard_cpu_percent_threshold = 90.0
+
+        triggered = self.service._ingest_overload_sample(
+            95.0,
+            {"healthy": False, "issues": ["cam1: Pipeline state error"], "message": "cam1 unhealthy"},
+            now=time.time(),
+        )
+        self.assertTrue(triggered["active"])
+        self.assertIn("overload_guard", self.service.degraded_cameras)
+
+        cleared = self.service._ingest_overload_sample(
+            35.0,
+            {"healthy": True, "message": "Recording healthy"},
+            now=time.time() + 1.0,
+        )
+        self.assertFalse(cleared["active"])
+        self.assertEqual(cleared["unhealthy_streak"], 0)
+        self.assertNotIn("overload_guard", self.service.degraded_cameras)
+
+    def test_status_includes_overload_guard_state(self) -> None:
+        idle_status = self.service.get_status()
+        self.assertIn("overload_guard", idle_status)
+        self.assertIn("active", idle_status["overload_guard"])
 
     def test_stop_recording_protection_and_force(self) -> None:
         start = self.service.start_recording("match_protected", process_after_recording=False)
