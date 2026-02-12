@@ -8,7 +8,7 @@ interface SessionReadyPayload {
   success: boolean;
   session_id: string;
   stream_kind: StreamKind;
-  ice_servers?: Array<{ urls: string[] }>;
+  ice_servers?: Array<{ urls: string[]; username?: string; credential?: string }>;
   message?: string;
 }
 
@@ -39,6 +39,36 @@ interface ActivePeer {
   peer: RTCPeerConnection;
   queuedLocalCandidates: RTCIceCandidateInit[];
   video: HTMLVideoElement;
+}
+
+function normalizeIceUrl(url: string): string {
+  return (url || '')
+    .trim()
+    .replace(/^stun:\/\//i, 'stun:')
+    .replace(/^stuns:\/\//i, 'stuns:')
+    .replace(/^turn:\/\//i, 'turn:')
+    .replace(/^turns:\/\//i, 'turns:');
+}
+
+function normalizeIceServers(iceServers?: RTCIceServer[]): RTCIceServer[] | undefined {
+  if (!iceServers?.length) return undefined;
+
+  const normalized: RTCIceServer[] = [];
+  for (const server of iceServers) {
+    if (!server) continue;
+    const urlsRaw = server.urls;
+    const urls = (Array.isArray(urlsRaw) ? urlsRaw : [urlsRaw])
+      .filter((u): u is string => typeof u === 'string' && u.trim().length > 0)
+      .map(normalizeIceUrl);
+    if (!urls.length) continue;
+
+    const item: RTCIceServer = { urls };
+    if (server.username) item.username = server.username;
+    if (server.credential) item.credential = server.credential;
+    normalized.push(item);
+  }
+
+  return normalized.length ? normalized : undefined;
 }
 
 class WebRtcService {
@@ -136,7 +166,7 @@ class WebRtcService {
     }
 
     const peer = new RTCPeerConnection({
-      iceServers: iceServers?.length ? iceServers : [{ urls: ['stun:stun.l.google.com:19302'] }],
+      iceServers: normalizeIceServers(iceServers) ?? [{ urls: ['stun:stun.l.google.com:19302'] }],
     });
 
     const state: ActivePeer = {

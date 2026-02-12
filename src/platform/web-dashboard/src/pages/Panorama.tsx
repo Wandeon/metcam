@@ -25,7 +25,7 @@ interface PanoramaStatus {
   transport?: 'hls' | 'webrtc';
   stream_kind?: 'panorama';
   hls_url?: string;
-  ice_servers?: Array<{ urls: string[] }>;
+  ice_servers?: Array<{ urls: string[]; username?: string; credential?: string }>;
   calibrated: boolean;
   calibration_date: string | null;
   quality_score: number | null;
@@ -779,7 +779,11 @@ export const Panorama: React.FC = () => {
                   framerate={status?.performance?.current_fps || 15}
                   transport={status?.transport || 'hls'}
                   streamKind={(status?.stream_kind as any) || 'panorama'}
-                  iceServers={status?.ice_servers?.map((s) => ({ urls: s.urls }))}
+                  iceServers={status?.ice_servers?.map((s) => ({
+                    urls: s.urls,
+                    username: s.username,
+                    credential: s.credential,
+                  }))}
                 />
 
                 {/* Performance Metrics */}
