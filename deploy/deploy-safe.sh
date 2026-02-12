@@ -25,10 +25,16 @@ SMOKE_DURATION_SECONDS=12
 RUN_SMOKE=1
 DEPLOY_CADDY=1
 DEPLOY_SYSTEMD=1
+DEPLOY_FRONTEND=1
+FORCE_FRONTEND=0
+
+FRONTEND_REL_DIR="src/platform/web-dashboard"
+FRONTEND_DEPLOY_DIR="/var/www/footballvision"
 
 PRE_DEPLOY_COMMIT=""
 TMP_DIR=""
 CONFIG_BACKUP=""
+FRONTEND_BACKUP_DIR=""
 ROLLBACK_IN_PROGRESS=0
 
 usage() {
@@ -42,6 +48,8 @@ Options:
   --no-smoke                  Skip recording smoke check
   --skip-caddy                Do not deploy/reload Caddy config
   --skip-systemd              Do not deploy/reload systemd service file
+  --skip-frontend             Do not build/deploy the web dashboard
+  --force-frontend            Force rebuild/redeploy of the web dashboard
   -h, --help                  Show this help
 EOF
 }
@@ -71,6 +79,14 @@ parse_args() {
                 ;;
             --skip-systemd)
                 DEPLOY_SYSTEMD=0
+                shift
+                ;;
+            --skip-frontend)
+                DEPLOY_FRONTEND=0
+                shift
+                ;;
+            --force-frontend)
+                FORCE_FRONTEND=1
                 shift
                 ;;
             -h|--help)
@@ -113,6 +129,79 @@ restore_config() {
         cp "$CONFIG_BACKUP" "$REPO_DIR/$CONFIG_REL_PATH"
         log_info "Restored preserved config to $CONFIG_REL_PATH"
     fi
+}
+
+backup_frontend() {
+    if [[ "$DEPLOY_FRONTEND" -ne 1 ]]; then
+        return 0
+    fi
+    if [[ -n "$FRONTEND_BACKUP_DIR" ]]; then
+        return 0
+    fi
+    FRONTEND_BACKUP_DIR="$TMP_DIR/frontend_backup"
+    mkdir -p "$FRONTEND_BACKUP_DIR"
+    if [[ -d "$FRONTEND_DEPLOY_DIR" ]]; then
+        rsync -a --delete "$FRONTEND_DEPLOY_DIR/" "$FRONTEND_BACKUP_DIR/" || true
+        log_info "Backed up frontend to $FRONTEND_BACKUP_DIR"
+    else
+        log_warn "Frontend deploy dir not found at $FRONTEND_DEPLOY_DIR (skipping backup)"
+    fi
+}
+
+restore_frontend() {
+    if [[ "$DEPLOY_FRONTEND" -ne 1 ]]; then
+        return 0
+    fi
+    if [[ -z "$FRONTEND_BACKUP_DIR" || ! -d "$FRONTEND_BACKUP_DIR" ]]; then
+        return 0
+    fi
+    sudo mkdir -p "$FRONTEND_DEPLOY_DIR"
+    sudo rsync -a --delete "$FRONTEND_BACKUP_DIR/" "$FRONTEND_DEPLOY_DIR/" || true
+    log_info "Restored frontend to $FRONTEND_DEPLOY_DIR"
+}
+
+frontend_should_deploy() {
+    if [[ "$DEPLOY_FRONTEND" -ne 1 ]]; then
+        return 1
+    fi
+    if [[ "$FORCE_FRONTEND" -eq 1 ]]; then
+        return 0
+    fi
+    local changed
+    changed="$(git -C "$REPO_DIR" diff --name-only "$PRE_DEPLOY_COMMIT"..HEAD 2>/dev/null || true)"
+    if echo "$changed" | grep -q "^${FRONTEND_REL_DIR}/"; then
+        return 0
+    fi
+    return 1
+}
+
+deploy_frontend() {
+    if ! frontend_should_deploy; then
+        log_info "Frontend unchanged; skipping web dashboard deploy"
+        return 0
+    fi
+
+    local ui_dir="$REPO_DIR/$FRONTEND_REL_DIR"
+    if [[ ! -d "$ui_dir" ]]; then
+        log_warn "Frontend directory not found at $ui_dir; skipping"
+        return 0
+    fi
+
+    backup_frontend
+
+    log_info "Building and deploying web dashboard"
+    pushd "$ui_dir" >/dev/null
+    if [[ -f package-lock.json ]]; then
+        npm ci
+    else
+        npm install
+    fi
+    npm run build
+    popd >/dev/null
+
+    sudo mkdir -p "$FRONTEND_DEPLOY_DIR"
+    sudo rsync -a --delete "$ui_dir/dist/" "$FRONTEND_DEPLOY_DIR/"
+    log_success "Web dashboard deployed to $FRONTEND_DEPLOY_DIR"
 }
 
 wait_for_health() {
@@ -232,6 +321,7 @@ rollback() {
     git checkout "$BRANCH" >/dev/null 2>&1 || true
     git reset --hard "$PRE_DEPLOY_COMMIT" >/dev/null 2>&1 || true
     restore_config
+    restore_frontend
     deploy_runtime_files >/dev/null 2>&1 || true
     restart_api_service >/dev/null 2>&1 || true
 
@@ -283,6 +373,7 @@ main() {
 
     restore_config
     deploy_runtime_files
+    deploy_frontend
     restart_api_service
     stop_any_active_recording
 

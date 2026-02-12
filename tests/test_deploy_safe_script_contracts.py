@@ -24,6 +24,14 @@ class TestDeploySafeScriptContracts(unittest.TestCase):
         self.assertIn("/recording?force=true", script)
         self.assertIn("run_recording_smoke", script)
 
+    def test_deploy_safe_script_supports_frontend_deploy(self) -> None:
+        script = (ROOT / "deploy" / "deploy-safe.sh").read_text(encoding="utf-8")
+        self.assertIn("DEPLOY_FRONTEND=1", script)
+        self.assertIn("--skip-frontend", script)
+        self.assertIn("--force-frontend", script)
+        self.assertIn("npm run build", script)
+        self.assertIn("/var/www/footballvision", script)
+
 
 if __name__ == "__main__":
     unittest.main()

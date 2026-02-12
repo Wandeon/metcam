@@ -50,9 +50,10 @@ What `deploy-safe.sh` does:
 1. Preserves local `config/camera_config.json`
 2. Fast-forwards `main` from `origin`
 3. Re-deploys systemd + Caddy configs
-4. Restarts API and verifies `/api/v1/health`
-5. Runs recording smoke test (start/wait/stop + integrity/transport checks)
-6. Rolls back to pre-deploy commit automatically on failure
+4. Builds and deploys the web dashboard when frontend files changed (or when forced)
+5. Restarts API and verifies `/api/v1/health`
+6. Runs recording smoke test (start/wait/stop + integrity/transport checks)
+7. Rolls back to pre-deploy commit automatically on failure
 
 Useful flags:
 
@@ -60,6 +61,8 @@ Useful flags:
 - `--smoke-duration <seconds>`
 - `--skip-caddy`
 - `--skip-systemd`
+- `--skip-frontend`
+- `--force-frontend`
 
 ---
 
