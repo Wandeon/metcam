@@ -1,0 +1,54 @@
+name: Hardware Regression Matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: "Per-preset recording duration"
+        required: false
+        default: "20"
+      min_fps:
+        description: "Minimum acceptable per-camera FPS"
+        required: false
+        default: "24"
+      max_cpu_p95:
+        description: "Maximum acceptable CPU p95"
+        required: false
+        default: "95"
+  schedule:
+    - cron: "30 2 * * *"
+
+jobs:
+  recording-matrix:
+    # Expected on an on-prem metcam runner.
+    runs-on: [self-hosted, linux, arm64, metcam]
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Recording Matrix
+        run: |
+          python3 scripts/run_recording_regression_matrix.py \
+            --api-base-url http://localhost:8000/api/v1 \
+            --duration-seconds "${{ inputs.duration_seconds || '20' }}" \
+            --min-fps "${{ inputs.min_fps || '24' }}" \
+            --max-cpu-p95 "${{ inputs.max_cpu_p95 || '95' }}"
+
+      - name: Upload Matrix Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recording-regression-matrix
+          path: artifacts/recording-regression/
+          if-no-files-found: warn

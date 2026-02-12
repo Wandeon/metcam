@@ -160,6 +160,7 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 - **[System Validation](deploy/validate.sh)** - Comprehensive system checks
 - **[Quick Functionality Test](deploy/quick-test.sh)** - Preview and recording tests
 - **[Performance Test](deploy/performance-test.sh)** - Framerate and CPU analysis
+- **[Recording Regression Matrix](docs/RECORDING_REGRESSION_MATRIX.md)** - Hardware-in-loop preset matrix (`fast`, `balanced`, `high`)
 
 ### Technical Documentation
 - [Architecture Details](docs/ARCHITECTURE.md)
