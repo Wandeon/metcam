@@ -21,6 +21,8 @@
   "_recording_overload_poll_interval_seconds_comment": "Seconds between overload guard runtime samples during active recording.",
   "recording_overload_unhealthy_streak_threshold": 3,
   "_recording_overload_unhealthy_streak_threshold_comment": "Consecutive unhealthy/overload samples required before overload guard activates.",
+  "recording_slo_min_effective_fps": 24.0,
+  "_recording_slo_min_effective_fps_comment": "SLO threshold for effective per-camera FPS used by post-stop alert hooks.",
   "cameras": {
     "0": {
       "rotation": 0.0,
