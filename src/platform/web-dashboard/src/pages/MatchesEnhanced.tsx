@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, Film, RefreshCw, Trash2, Package, Loader2, CheckCircle } from 'lucide-react';
+import { Download, Film, Play, RefreshCw, Trash2, Package, Loader2, CheckCircle, X, Cloud } from 'lucide-react';
+import type { R2ArchiveFile } from '../services/api';
 
 interface RecordingEntry {
   file: string;
@@ -126,6 +127,11 @@ export const Matches: React.FC = () => {
   const [diskStatus, setDiskStatus] = useState<{ freeGb: number; percentUsed: number } | null>(null);
   const [sortOption, setSortOption] = useState<'date_desc' | 'date_asc' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'>('date_desc');
   const [processingStatus, setProcessingStatus] = useState<Record<string, { processing: boolean; completed: boolean }>>({});
+  const [playerModalMatchId, setPlayerModalMatchId] = useState<string | null>(null);
+  const [r2Archives, setR2Archives] = useState<R2ArchiveFile[]>([]);
+  const [loadingR2, setLoadingR2] = useState(false);
+  const [r2Error, setR2Error] = useState<string | null>(null);
+  const [activeVideo, setActiveVideo] = useState<string | null>(null);
 
   const sortedMatches = useMemo(() => {
     const matchesCopy = [...matches];
@@ -582,6 +588,51 @@ export const Matches: React.FC = () => {
     }
   };
 
+  const handlePlayClick = async (matchId: string) => {
+    setPlayerModalMatchId(matchId);
+    setR2Archives([]);
+    setR2Error(null);
+    setActiveVideo(null);
+    setLoadingR2(true);
+    try {
+      const response = await fetch(`/api/v1/recordings/${matchId}/r2-urls`);
+      if (response.status === 503) {
+        setR2Error('Cloud storage (R2) is not configured on this device. Use Download instead.');
+        return;
+      }
+      if (!response.ok) {
+        setR2Error(`Failed to load cloud URLs (${response.status})`);
+        return;
+      }
+      const data = await response.json();
+      const files: R2ArchiveFile[] = data.files || [];
+      setR2Archives(files);
+      if (files.length > 0) {
+        const panorama = files.find(f => f.name.includes('panorama'));
+        setActiveVideo(panorama ? panorama.url : files[0].url);
+      }
+    } catch (error) {
+      console.error('Failed to load R2 URLs:', error);
+      setR2Error('Network error loading cloud URLs. Use Download instead.');
+    } finally {
+      setLoadingR2(false);
+    }
+  };
+
+  const handlePlayerModalClose = () => {
+    setPlayerModalMatchId(null);
+    setR2Archives([]);
+    setR2Error(null);
+    setActiveVideo(null);
+  };
+
+  const getVideoLabel = (name: string) => {
+    if (name.includes('panorama')) return 'Panorama View (3840x1080)';
+    if (name.includes('cam0')) return 'Camera 0 (1920x1080)';
+    if (name.includes('cam1')) return 'Camera 1 (1920x1080)';
+    return name;
+  };
+
   if (loading) {
     return (
       <div className="p-4 md:p-6 animate-pulse">Loading recordings…</div>
@@ -630,6 +681,114 @@ export const Matches: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {playerModalMatchId && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4"
+          onClick={handlePlayerModalClose}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-6xl w-full p-6 max-h-[95vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold">Play Recording</h3>
+              <button
+                onClick={handlePlayerModalClose}
+                className="p-1 hover:bg-gray-100 rounded"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-gray-600 mb-4">
+              <strong>{playerModalMatchId}</strong>
+            </p>
+
+            {loadingR2 && (
+              <div className="py-12 text-center text-gray-500">
+                <Loader2 className="w-8 h-8 mx-auto mb-3 animate-spin text-blue-500" />
+                <p>Loading cloud URLs...</p>
+              </div>
+            )}
+
+            {r2Error && (
+              <div className="py-8 text-center">
+                <div className="bg-red-50 border border-red-200 rounded-lg px-6 py-4 inline-block">
+                  <p className="text-red-800 font-medium">{r2Error}</p>
+                  <p className="text-sm text-red-600 mt-2">You can still use the Download button to get the files.</p>
+                </div>
+              </div>
+            )}
+
+            {!loadingR2 && !r2Error && r2Archives.length === 0 && (
+              <div className="py-8 text-center text-gray-500">
+                <Cloud className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                <p className="font-medium">Not uploaded to cloud yet</p>
+                <p className="text-sm mt-1">This recording hasn't been uploaded to R2. Use Download instead.</p>
+              </div>
+            )}
+
+            {!loadingR2 && !r2Error && activeVideo && (
+              <>
+                <div className="bg-black rounded-lg overflow-hidden mb-4">
+                  <video
+                    key={activeVideo}
+                    controls
+                    autoPlay
+                    className="w-full max-h-[60vh]"
+                    style={{ aspectRatio: r2Archives.find(f => f.url === activeVideo)?.name.includes('panorama') ? '32/9' : '16/9' }}
+                  >
+                    <source src={activeVideo} type="video/mp4" />
+                    Your browser does not support video playback.
+                  </video>
+                </div>
+
+                {r2Archives.length > 1 && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Select view:</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {r2Archives.map((file) => {
+                        const isActive = file.url === activeVideo;
+                        return (
+                          <button
+                            key={file.key}
+                            onClick={() => setActiveVideo(file.url)}
+                            className={`px-4 py-3 rounded border text-sm font-medium transition-colors touch-manipulation text-left ${
+                              isActive
+                                ? 'bg-green-600 text-white border-green-600'
+                                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                            }`}
+                          >
+                            <span className="block">{getVideoLabel(file.name)}</span>
+                            <span className={`text-xs ${isActive ? 'text-green-100' : 'text-gray-500'}`}>
+                              {file.size_mb >= 1000
+                                ? `${(file.size_mb / 1024).toFixed(2)} GB`
+                                : `${file.size_mb.toFixed(1)} MB`}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-xs text-gray-400 text-center">
+                  Video streams directly from cloud storage. URL expires in 1 hour.
+                </p>
+              </>
+            )}
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={handlePlayerModalClose}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {downloadModalMatchId && (
         <div
@@ -889,6 +1048,14 @@ export const Matches: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => handlePlayClick(match.id)}
+                  className="flex items-center px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm touch-manipulation"
+                >
+                  <Play className="w-4 h-4 mr-1" />
+                  Play
+                </button>
+
                 <button
                   onClick={() => handleDownloadClick(match.id)}
                   className="flex items-center px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm touch-manipulation"

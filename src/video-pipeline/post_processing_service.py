@@ -114,6 +114,73 @@ class PostProcessingService:
             logger.error(f"Encoding error for cam{camera_id}: {e}")
             return False
 
+    def _stitch_panorama(self, cam0_file: Path, cam1_file: Path, output_file: Path, match_id: str) -> bool:
+        """
+        Stitch two 1920x1080 camera archives side-by-side into a 3840x1080 panorama.
+
+        Settings:
+        - CRF 26 (compensates for generation loss since inputs are already CRF 28)
+        - preset medium (inputs already compressed, faster is fine)
+        - 2-hour timeout (panorama is ~2x the data of one camera)
+
+        Returns True on success, False on failure.
+        """
+        if not cam0_file.exists() or not cam1_file.exists():
+            logger.warning(f"Cannot stitch panorama for {match_id}: missing archive(s) "
+                           f"(cam0={cam0_file.exists()}, cam1={cam1_file.exists()})")
+            return False
+
+        try:
+            logger.info(f"Starting panorama stitch for {match_id}: "
+                        f"{cam0_file.name} + {cam1_file.name} → {output_file.name}")
+
+            stitch_cmd = [
+                'ffmpeg',
+                '-i', str(cam0_file),
+                '-i', str(cam1_file),
+                '-filter_complex', '[0:v][1:v]hstack=inputs=2',
+                '-c:v', 'libx264',
+                '-preset', 'medium',
+                '-crf', '26',
+                '-r', '30',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                '-metadata', f'title=Match {match_id} Panorama Archive',
+                '-metadata', f'comment=Side-by-side panorama (3840x1080), CRF 26',
+                '-y',
+                str(output_file)
+            ]
+
+            result = subprocess.run(
+                stitch_cmd,
+                capture_output=True,
+                text=True,
+                timeout=7200  # 2 hour timeout
+            )
+
+            if result.returncode != 0:
+                logger.error(f"Panorama stitch failed for {match_id}: {result.stderr[-1000:]}")
+                return False
+
+            if not output_file.exists():
+                logger.error(f"Panorama output file not created: {output_file}")
+                return False
+
+            output_size_mb = output_file.stat().st_size / (1024 * 1024)
+            if output_size_mb == 0:
+                logger.error(f"Panorama output file is empty: {output_file}")
+                return False
+
+            logger.info(f"Panorama stitch complete for {match_id}: {output_size_mb:.1f} MB")
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Panorama stitch timeout for {match_id}")
+            return False
+        except Exception as e:
+            logger.error(f"Panorama stitch error for {match_id}: {e}")
+            return False
+
     def _process_camera(
         self,
         match_id: str,
@@ -206,6 +273,15 @@ class PostProcessingService:
 
             if success:
                 logger.info(f"Post-processing complete for {match_id} ({duration:.1f}s)")
+
+                # Stitch panorama (non-blocking — failure doesn't block upload)
+                cam0_archive = segments_dir.parent / "cam0_archive.mp4"
+                cam1_archive = segments_dir.parent / "cam1_archive.mp4"
+                panorama_archive = segments_dir.parent / "panorama_archive.mp4"
+
+                panorama_ok = self._stitch_panorama(cam0_archive, cam1_archive, panorama_archive, match_id)
+                if not panorama_ok:
+                    logger.warning(f"Panorama stitch failed for {match_id}, uploading individual archives only")
 
                 # Upload to R2 after successful processing
                 upload_result = {'success': False, 'message': 'Upload not attempted'}

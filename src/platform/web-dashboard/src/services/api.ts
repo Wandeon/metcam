@@ -259,6 +259,24 @@ export interface PreviewRequest {
 }
 
 // ============================================================================
+// R2 Archive Types
+// ============================================================================
+
+export interface R2ArchiveFile {
+  name: string;
+  key: string;
+  size_mb: number;
+  url: string;
+}
+
+export interface R2UrlsResponse {
+  success: boolean;
+  message: string;
+  files: R2ArchiveFile[];
+  expires_in_seconds?: number;
+}
+
+// ============================================================================
 // API Service
 // ============================================================================
 
@@ -384,6 +402,15 @@ export const apiService = {
    */
   async deleteRecording(matchId: string): Promise<DeleteRecordingResponse> {
     const response = await api.delete<DeleteRecordingResponse>(`/recordings/${matchId}`);
+    return response.data;
+  },
+
+  // ========================================================================
+  // R2 cloud playback endpoints
+  // ========================================================================
+
+  async getRecordingR2Urls(matchId: string): Promise<R2UrlsResponse> {
+    const response = await api.get<R2UrlsResponse>(`/recordings/${matchId}/r2-urls`);
     return response.data;
   },
 

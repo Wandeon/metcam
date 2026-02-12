@@ -1340,6 +1340,37 @@ def download_recording_file(match_id: str, file_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/v1/recordings/{match_id}/r2-urls")
+def get_recording_r2_urls(match_id: str):
+    """Get presigned R2 URLs for a match's archive files for direct browser playback."""
+    api_requests.labels(endpoint='recording_r2_urls', method='GET').inc()
+    try:
+        from r2_upload_service import get_r2_upload_service
+        r2_service = get_r2_upload_service()
+
+        if not r2_service.enabled:
+            raise HTTPException(status_code=503, detail="R2 storage not configured")
+
+        match_dir = Path(f"/mnt/recordings/{match_id}")
+        if not match_dir.exists():
+            raise HTTPException(status_code=404, detail=f"Recording {match_id} not found")
+
+        files = r2_service.list_match_archives(match_id)
+
+        return {
+            "success": True,
+            "message": f"Found {len(files)} archive(s) in R2" if files else "No archives uploaded to R2 yet",
+            "files": files,
+            "expires_in_seconds": 3600,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get R2 URLs for {match_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/v1/recording-health")
 def get_recording_health():
     """Get active recording health based on segment freshness and size."""

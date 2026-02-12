@@ -107,7 +107,7 @@ class R2UploadService:
                 "failed": [],
             }
 
-        archive_files = list(match_dir.glob("cam*_archive.mp4"))
+        archive_files = list(match_dir.glob("*_archive.mp4"))
         if not archive_files:
             logger.warning(f"No archive files found for {match_id}")
             return {
@@ -137,6 +137,51 @@ class R2UploadService:
             "failed": failed,
             "remote_folder": f"r2://{self.bucket}/{remote_prefix}",
         }
+
+
+    def generate_presigned_url(self, key: str, expiration: int = 3600) -> Optional[str]:
+        """Generate a presigned URL for direct browser access to an R2 object."""
+        if not self.enabled or not self._client:
+            return None
+        try:
+            return self._client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': self.bucket, 'Key': key},
+                ExpiresIn=expiration
+            )
+        except Exception as e:
+            logger.error(f"Presigned URL error for {key}: {e}")
+            return None
+
+    def list_match_archives(self, match_id: str) -> list:
+        """List all archive files for a match in R2 with presigned URLs."""
+        if not self.enabled or not self._client:
+            return []
+
+        prefix = self._build_key(match_id, "")
+        try:
+            response = self._client.list_objects_v2(
+                Bucket=self.bucket,
+                Prefix=prefix
+            )
+            files = []
+            for obj in response.get('Contents', []):
+                key = obj['Key']
+                if not key.endswith('.mp4'):
+                    continue
+                name = key.rsplit('/', 1)[-1]
+                url = self.generate_presigned_url(key)
+                if url:
+                    files.append({
+                        'name': name,
+                        'key': key,
+                        'size_mb': round(obj['Size'] / (1024 * 1024), 2),
+                        'url': url,
+                    })
+            return files
+        except Exception as e:
+            logger.error(f"Failed to list R2 archives for {match_id}: {e}")
+            return []
 
 
 _r2_upload_service: Optional[R2UploadService] = None
