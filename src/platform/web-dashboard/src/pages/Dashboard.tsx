@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { apiService, RecordingStatus, StatusResponseV3 } from '@/services/api';
+import { apiService, RecordingStatus, RecordingStopResponse, StatusResponseV3 } from '@/services/api';
 import { useWsChannel, useWsCommand } from '@/hooks/useWebSocket';
-import { Video, AlertCircle, CheckCircle, Clock, X } from 'lucide-react';
+import { Video, AlertCircle, AlertTriangle, CheckCircle, Clock, X } from 'lucide-react';
+
+function isRunningState(state?: string): boolean {
+  const normalized = (state || '').toLowerCase();
+  return normalized === 'playing' || normalized === 'running';
+}
 
 // Transform raw WS/REST status data (same shape as GET /api/v1/status) to legacy RecordingStatus
 function transformStatus(raw: StatusResponseV3): RecordingStatus {
@@ -10,8 +15,13 @@ function transformStatus(raw: StatusResponseV3): RecordingStatus {
     recording: raw.recording.recording,
     match_id: raw.recording.match_id || undefined,
     duration_seconds: raw.recording.duration,
-    cam0_running: (raw.recording.cameras?.camera_0?.state === 'PLAYING' || raw.recording.cameras?.camera_0?.state === 'running') || false,
-    cam1_running: (raw.recording.cameras?.camera_1?.state === 'PLAYING' || raw.recording.cameras?.camera_1?.state === 'running') || false,
+    cam0_running: isRunningState(raw.recording.cameras?.camera_0?.state),
+    cam1_running: isRunningState(raw.recording.cameras?.camera_1?.state),
+    require_all_cameras: raw.recording.require_all_cameras,
+    degraded: raw.recording.degraded || false,
+    degraded_cameras: raw.recording.degraded_cameras || {},
+    camera_recovery: raw.recording.camera_recovery || {},
+    overload_guard: raw.recording.overload_guard,
   };
 }
 
@@ -31,6 +41,7 @@ export const Dashboard: React.FC = () => {
   const [status, setStatus] = useState<RecordingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [matchId, setMatchId] = useState('');
   const [processAfterRecording, setProcessAfterRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -63,6 +74,31 @@ export const Dashboard: React.FC = () => {
     }).catch(() => setLoading(false));
   }, []);
 
+  const applyStopOutcome = (result: RecordingStopResponse) => {
+    const duration = result.duration_seconds || status?.duration_seconds || 0;
+    const durationMins = Math.floor(duration / 60);
+    const durationSecs = Math.round(duration % 60);
+    const durationLabel = `${durationMins}m ${durationSecs}s`;
+    const integrityFailed = result.integrity?.all_ok === false;
+
+    if (result.success) {
+      setSuccessMessage(`Recording stopped successfully! Duration: ${durationLabel}`);
+      setTimeout(() => setSuccessMessage(null), 8000);
+      return;
+    }
+
+    if (result.transport_success || result.graceful_stop || integrityFailed) {
+      const message = result.message || 'Recording stop completed with warnings';
+      const integrityHint = integrityFailed ? ' Integrity checks failed.' : '';
+      setWarningMessage(`${message}${integrityHint} Duration: ${durationLabel}`);
+      setTimeout(() => setWarningMessage(null), 12000);
+      return;
+    }
+
+    setError(result.message || 'Failed to stop recording cleanly');
+    setTimeout(() => setError(null), 5000);
+  };
+
   const handleStartRecording = async () => {
     if (!matchId.trim()) {
       setError('Please enter a match ID');
@@ -71,6 +107,7 @@ export const Dashboard: React.FC = () => {
     }
 
     setIsStarting(true);
+    setWarningMessage(null);
     try {
       const startRecordingViaRest = async () => {
         try {
@@ -82,18 +119,24 @@ export const Dashboard: React.FC = () => {
         } catch {
           // Continue anyway
         }
-        await apiService.startRecording({
+        const result = await apiService.startRecording({
           match_id: matchId,
           process_after_recording: processAfterRecording,
         });
+        if (result.status !== 'started') {
+          throw new Error('Failed to start recording');
+        }
       };
 
       if (wsConnected) {
         try {
-          await sendCommand('start_recording', {
+          const result = await sendCommand('start_recording', {
             match_id: matchId,
             process_after_recording: processAfterRecording,
           });
+          if (result?.success === false) {
+            throw new Error(result.message || 'Failed to start recording');
+          }
         } catch (err) {
           if (isWsTransportError(err)) {
             await startRecordingViaRest();
@@ -125,21 +168,33 @@ export const Dashboard: React.FC = () => {
 
     setIsStopping(true);
     setConfirmStop(false);
+    setWarningMessage(null);
     try {
       const stopRecordingViaRest = async () => {
         const result = await apiService.stopRecording();
-        const durationMins = Math.floor(result.duration_seconds / 60);
-        const durationSecs = Math.round(result.duration_seconds % 60);
-        setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+        applyStopOutcome(result);
       };
 
       if (wsConnected) {
         try {
-          await sendCommand('stop_recording');
-          const duration = status?.duration_seconds || 0;
-          const durationMins = Math.floor(duration / 60);
-          const durationSecs = Math.round(duration % 60);
-          setSuccessMessage(`Recording stopped successfully! Duration: ${durationMins}m ${durationSecs}s`);
+          const wsResult = await sendCommand('stop_recording');
+          applyStopOutcome({
+            status: wsResult?.success ? 'stopped' : 'partial',
+            match_id: status?.match_id || 'unknown',
+            duration_seconds: status?.duration_seconds || 0,
+            success: wsResult?.success,
+            message: wsResult?.message,
+            transport_success: wsResult?.transport_success,
+            graceful_stop: wsResult?.graceful_stop,
+            camera_stop_results: wsResult?.camera_stop_results || {},
+            integrity: wsResult?.integrity,
+            files: {
+              cam0: null,
+              cam1: null,
+              cam0_size_mb: 0,
+              cam1_size_mb: 0,
+            },
+          });
         } catch (err) {
           if (isWsTransportError(err)) {
             await stopRecordingViaRest();
@@ -150,7 +205,6 @@ export const Dashboard: React.FC = () => {
       } else {
         await stopRecordingViaRest();
       }
-      setTimeout(() => setSuccessMessage(null), 8000);
     } catch (err: any) {
       setError(err.message || 'Failed to stop recording');
       setTimeout(() => setError(null), 5000);
@@ -175,6 +229,13 @@ export const Dashboard: React.FC = () => {
   }
 
   const isRecording = status?.status === 'recording';
+  const degradedEntries = Object.entries(status?.degraded_cameras || {});
+  const recoveryEntries = Object.entries(status?.camera_recovery || {}).filter(([, value]) =>
+    value?.recovering || value?.failed_permanently || (value?.attempts || 0) > 0,
+  );
+  const overloadGuardActive = Boolean(status?.overload_guard?.active);
+  const cam0Degraded = status?.degraded_cameras?.camera_0;
+  const cam1Degraded = status?.degraded_cameras?.camera_1;
 
   return (
     <div className="p-6 space-y-6">
@@ -190,6 +251,18 @@ export const Dashboard: React.FC = () => {
             {error}
           </div>
           <button onClick={() => setError(null)} className="text-red-600 hover:text-red-800">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      )}
+
+      {warningMessage && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-3 rounded-lg flex items-center justify-between">
+          <div className="flex items-center">
+            <AlertTriangle className="w-5 h-5 mr-2" />
+            {warningMessage}
+          </div>
+          <button onClick={() => setWarningMessage(null)} className="text-amber-700 hover:text-amber-900">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -214,7 +287,11 @@ export const Dashboard: React.FC = () => {
               <p className="text-sm text-gray-600">Status</p>
               <p className="text-2xl font-bold mt-1">
                 {isRecording ? (
-                  <span className="text-red-600">Recording</span>
+                  status?.degraded ? (
+                    <span className="text-amber-600">Recording (Degraded)</span>
+                  ) : (
+                    <span className="text-red-600">Recording</span>
+                  )
                 ) : (
                   <span className="text-gray-600">Idle</span>
                 )}
@@ -239,6 +316,9 @@ export const Dashboard: React.FC = () => {
                   <span className="text-gray-400">Inactive</span>
                 )}
               </p>
+              {cam0Degraded && (
+                <p className="text-xs text-amber-600 mt-1">{cam0Degraded}</p>
+              )}
             </div>
             <Video className={`w-8 h-8 ${status?.cam0_running ? 'text-green-500' : 'text-gray-400'}`} />
           </div>
@@ -255,11 +335,47 @@ export const Dashboard: React.FC = () => {
                   <span className="text-gray-400">Inactive</span>
                 )}
               </p>
+              {cam1Degraded && (
+                <p className="text-xs text-amber-600 mt-1">{cam1Degraded}</p>
+              )}
             </div>
             <Video className={`w-8 h-8 ${status?.cam1_running ? 'text-green-500' : 'text-gray-400'}`} />
           </div>
         </div>
       </div>
+
+      {isRecording && (status?.degraded || overloadGuardActive || recoveryEntries.length > 0) && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-4 space-y-2">
+          <p className="font-semibold flex items-center">
+            <AlertTriangle className="w-4 h-4 mr-2" />
+            Recording health signals
+          </p>
+          {overloadGuardActive && (
+            <p className="text-sm">
+              Overload guard is active{status?.overload_guard?.cpu_percent !== undefined && status?.overload_guard?.cpu_percent !== null
+                ? ` (CPU ${status.overload_guard.cpu_percent.toFixed(1)}%)`
+                : ''}.
+            </p>
+          )}
+          {degradedEntries.length > 0 && (
+            <div className="text-sm">
+              {degradedEntries.map(([camera, reason]) => (
+                <p key={camera}>{camera.replace('_', ' ')}: {reason}</p>
+              ))}
+            </div>
+          )}
+          {recoveryEntries.length > 0 && (
+            <div className="text-sm">
+              {recoveryEntries.map(([camera, recovery]) => (
+                <p key={camera}>
+                  {camera.replace('_', ' ')} recovery attempts: {recovery.attempts}
+                  {recovery.failed_permanently ? ' (failed permanently)' : recovery.recovering ? ' (recovering)' : ''}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {isRecording && status?.duration_seconds !== undefined && (
         <div className="bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-lg p-6">
@@ -320,13 +436,13 @@ export const Dashboard: React.FC = () => {
             <div className="text-sm text-gray-600 bg-gray-50 p-4 rounded-lg">
               <p className="font-semibold mb-2">Recording Settings:</p>
               <ul className="space-y-1">
-                <li>• Resolution: 2880×1620 @ 30fps (VIC GPU cropped from 4K)</li>
-                <li>• Encoder: H.264 NVENC hardware accelerated</li>
-                <li>• Bitrate: 12 Mbps per camera</li>
-                <li>• Segments: 10-minute MKV files</li>
+                <li>• Resolution/FPS: Applied from active camera configuration</li>
+                <li>• Encoder: H.264 `x264enc` software pipeline (preset-controlled)</li>
+                <li>• Bitrate: 20-25 Mbps per camera (preset-dependent)</li>
+                <li>• Segments: 10-minute MP4 splitmux files</li>
                 <li>• Protection: 10 second minimum recording duration</li>
-                <li>• Storage: ~180 MB/min = 27 GB per 150min session</li>
                 <li>• Location: /mnt/recordings/[match_id]/segments/</li>
+                <li>• Camera policy: {status?.require_all_cameras ? 'All cameras required' : 'Single-camera degradation allowed'}</li>
               </ul>
             </div>
           </div>

@@ -154,9 +154,13 @@ const panoramaApi = {
     const matches: Match[] = [];
     if (data.recordings) {
       Object.keys(data.recordings).forEach(matchId => {
+        const createdAtRaw = data.recordings?.[matchId]?.created_at;
+        const createdAtMs = typeof createdAtRaw === 'number'
+          ? (createdAtRaw > 1e12 ? createdAtRaw : createdAtRaw * 1000)
+          : 0;
         matches.push({
           id: matchId,
-          date: Date.now(), // Simplified - would parse from match ID or metadata
+          date: createdAtMs,
         });
       });
     }

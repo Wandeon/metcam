@@ -37,6 +37,25 @@ const api = axios.create({
 // API v3 Response Types (Updated for new in-process GStreamer architecture)
 // ============================================================================
 
+export interface CameraRecoveryState {
+  attempts: number;
+  recovering: boolean;
+  failed_permanently: boolean;
+  last_error?: string | null;
+  last_recovery_ts?: number | null;
+}
+
+export interface OverloadGuardState {
+  active: boolean;
+  triggered_at?: number | null;
+  last_evaluated_at?: number | null;
+  unhealthy_streak?: number;
+  cpu_percent?: number | null;
+  reasons?: string[];
+  health_healthy?: boolean | null;
+  health_message?: string | null;
+}
+
 export interface RecordingStatusV3 {
   recording: boolean;
   match_id: string | null;
@@ -52,6 +71,11 @@ export interface RecordingStatusV3 {
     };
   };
   protected: boolean;
+  require_all_cameras?: boolean;
+  degraded?: boolean;
+  degraded_cameras?: Record<string, string>;
+  camera_recovery?: Record<string, CameraRecoveryState>;
+  overload_guard?: OverloadGuardState;
 }
 
 export interface PreviewStatusV3 {
@@ -107,6 +131,11 @@ export interface RecordingStatus {
   cam1_running?: boolean;
   mode?: string;
   mode_description?: string;
+  require_all_cameras?: boolean;
+  degraded?: boolean;
+  degraded_cameras?: Record<string, string>;
+  camera_recovery?: Record<string, CameraRecoveryState>;
+  overload_guard?: OverloadGuardState;
 }
 
 export interface RecordingRequest {
@@ -131,6 +160,14 @@ export interface RecordingStopResponseV3 {
   success: boolean;
   message: string;
   protected?: boolean;
+  transport_success?: boolean;
+  graceful_stop?: boolean;
+  camera_stop_results?: Record<string, any>;
+  integrity?: {
+    all_ok?: boolean;
+    cameras?: Record<string, any>;
+    issues?: string[];
+  };
 }
 
 // Legacy types
@@ -146,6 +183,16 @@ export interface RecordingStopResponse {
   status: string;
   match_id: string;
   duration_seconds: number;
+  success?: boolean;
+  message?: string;
+  transport_success?: boolean;
+  graceful_stop?: boolean;
+  camera_stop_results?: Record<string, any>;
+  integrity?: {
+    all_ok?: boolean;
+    cameras?: Record<string, any>;
+    issues?: string[];
+  };
   files: {
     cam0: string | null;
     cam1: string | null;
@@ -217,6 +264,8 @@ export const apiService = {
     try {
       const response = await api.get<StatusResponseV3>('/status');
       const data = response.data;
+      const cam0State = data.recording.cameras?.camera_0?.state;
+      const cam1State = data.recording.cameras?.camera_1?.state;
 
       // Transform v3 response to legacy format for backward compatibility
       return {
@@ -224,8 +273,13 @@ export const apiService = {
         recording: data.recording.recording,
         match_id: data.recording.match_id || undefined,
         duration_seconds: data.recording.duration,
-        cam0_running: (data.recording.cameras?.camera_0?.state === 'PLAYING' || data.recording.cameras?.camera_0?.state === 'running') || false,
-        cam1_running: (data.recording.cameras?.camera_1?.state === 'PLAYING' || data.recording.cameras?.camera_1?.state === 'running') || false,
+        cam0_running: (cam0State === 'PLAYING' || cam0State === 'running') || false,
+        cam1_running: (cam1State === 'PLAYING' || cam1State === 'running') || false,
+        require_all_cameras: data.recording.require_all_cameras,
+        degraded: data.recording.degraded || false,
+        degraded_cameras: data.recording.degraded_cameras || {},
+        camera_recovery: data.recording.camera_recovery || {},
+        overload_guard: data.recording.overload_guard,
       };
     } catch (error) {
       console.error('Failed to get status:', error);
@@ -233,6 +287,9 @@ export const apiService = {
       return {
         status: 'idle',
         recording: false,
+        degraded: false,
+        degraded_cameras: {},
+        camera_recovery: {},
       };
     }
   },
@@ -276,16 +333,25 @@ export const apiService = {
 
     const response = await api.delete<RecordingStopResponseV3>('/recording');
     const data = response.data;
-
-    if (!data.success) {
-      throw new Error(data.message || 'Failed to stop recording');
-    }
+    const transportSuccess = data.transport_success ?? data.success;
+    const gracefulStop = data.graceful_stop ?? data.success;
+    const stopStatus = data.success
+      ? 'stopped'
+      : transportSuccess || gracefulStop
+        ? 'partial'
+        : 'failed';
 
     // Transform v3 response to legacy format
     return {
-      status: 'stopped',
+      status: stopStatus,
       match_id: currentStatus?.match_id || 'unknown',
       duration_seconds: currentStatus?.duration_seconds || 0,
+      success: data.success,
+      message: data.message,
+      transport_success: transportSuccess,
+      graceful_stop: gracefulStop,
+      camera_stop_results: data.camera_stop_results || {},
+      integrity: data.integrity,
       files: {
         cam0: null,  // File info not available in v3 response
         cam1: null,

@@ -52,7 +52,7 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("function isWsTransportError", source)
         self.assertIn("if (isWsTransportError(err))", source)
         self.assertIn("await startPreviewViaRest()", source)
-        self.assertIn("await startCalibrationViaRest()", source)
+        self.assertNotIn("startCalibrationViaRest", source)
         self.assertIn("await stopPreviewViaRest()", source)
 
     def test_dedup_replays_cached_command_result(self) -> None:

@@ -125,7 +125,6 @@ export const Matches: React.FC = () => {
   const [deletingMatchId, setDeletingMatchId] = useState<string | null>(null);
   const [diskStatus, setDiskStatus] = useState<{ freeGb: number; percentUsed: number } | null>(null);
   const [sortOption, setSortOption] = useState<'date_desc' | 'date_asc' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'>('date_desc');
-  const [debugInfo, setDebugInfo] = useState<string>('');
   const [processingStatus, setProcessingStatus] = useState<Record<string, { processing: boolean; completed: boolean }>>({});
 
   const sortedMatches = useMemo(() => {
@@ -203,14 +202,12 @@ export const Matches: React.FC = () => {
 
   const loadMatches = async () => {
     try {
-      setDebugInfo('Fetching data...');
       const [recordingsResponse, healthResponse] = await Promise.all([
         fetch('/api/v1/recordings'),
         fetch('/api/v1/health').catch(() => null),
       ]);
 
       const data = await recordingsResponse.json();
-      setDebugInfo(`API response: ${JSON.stringify(data).substring(0, 100)}...`);
 
       if (healthResponse && healthResponse.ok) {
         try {
@@ -327,7 +324,7 @@ export const Matches: React.FC = () => {
           const firstTimestamp = metadataTimestamp
             ?? (timestamps.length > 0
               ? Math.min(...timestamps)
-              : parseTimestampFromString(matchId) || Date.now());
+              : parseTimestampFromString(matchId) || 0);
 
           const cameraMap = new Map<string, number>();
           entries.forEach((entry) => {
@@ -364,7 +361,6 @@ export const Matches: React.FC = () => {
 
       const filteredMatches = matchList.filter(match => match.files.length > 0);
       setMatches(filteredMatches);
-      setDebugInfo(`Loaded ${filteredMatches.length} matches`);
 
       // Fetch processing status for all matches in parallel
       const statusPromises = filteredMatches.map(match =>
@@ -378,7 +374,6 @@ export const Matches: React.FC = () => {
       setProcessingStatus(statusMap);
     } catch (error) {
       console.error('Failed to load matches:', error);
-      setDebugInfo(`Error: ${error}`);
     } finally {
       setLoading(false);
     }
@@ -466,7 +461,7 @@ export const Matches: React.FC = () => {
               name: safeName,
               path: normalizedPath,
               size_mb: typeof segment?.size_mb === 'number' ? segment.size_mb : 0,
-              created_at: createdSeconds ?? Math.floor(Date.now() / 1000),
+              created_at: createdSeconds ?? 0,
               segment_number: rawSegmentNumber ?? index + 1,
               camera: resolvedCamera,
             };
@@ -595,11 +590,6 @@ export const Matches: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6">
-      {debugInfo && (
-        <div className="mb-4 p-3 bg-yellow-100 border border-yellow-400 rounded text-sm font-mono">
-          <strong>Debug:</strong> {debugInfo} | Loading: {loading ? 'true' : 'false'} | Matches: {matches.length} | Sorted: {sortedMatches.length}
-        </div>
-      )}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Matches</h1>
