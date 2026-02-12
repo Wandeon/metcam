@@ -78,6 +78,10 @@ class WebRtcService {
   private pendingAnswerBySession = new Map<string, PendingSignal<AnswerPayload>>();
   private initialized = false;
   private unsubs: Array<() => void> = [];
+  /** Incremented each time streams are killed by a WS disconnect.
+   *  CameraPreview watches this to know when to re-start WebRTC. */
+  private _disconnectGeneration = 0;
+  private _generationListeners = new Set<() => void>();
 
   init(): void {
     if (this.initialized) return;
@@ -146,8 +150,15 @@ class WebRtcService {
     this.unsubs.push(
       wsManager.onConnectionChange((connected) => {
         if (connected) return;
+        const hadStreams = this.peersByStream.size > 0;
         for (const streamKind of Array.from(this.peersByStream.keys())) {
           this.stopStream(streamKind);
+        }
+        if (hadStreams) {
+          this._disconnectGeneration++;
+          for (const listener of this._generationListeners) {
+            listener();
+          }
         }
       }),
     );
@@ -291,6 +302,15 @@ class WebRtcService {
     }
 
     this.peersByStream.delete(streamKind);
+  }
+
+  get disconnectGeneration(): number {
+    return this._disconnectGeneration;
+  }
+
+  onDisconnectGeneration(listener: () => void): () => void {
+    this._generationListeners.add(listener);
+    return () => { this._generationListeners.delete(listener); };
   }
 
   shutdown(): void {
