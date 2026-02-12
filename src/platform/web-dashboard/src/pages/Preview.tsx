@@ -32,6 +32,12 @@ function isWsTransportError(err: unknown): boolean {
   return normalized.includes('websocket not connected') || normalized.includes('websocket disconnected');
 }
 
+function assertCommandSuccess(result: any, fallbackMessage: string): void {
+  if (result && typeof result === 'object' && result.success === false) {
+    throw new Error(result.message || fallbackMessage);
+  }
+}
+
 export const Preview: React.FC = () => {
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,12 +80,16 @@ export const Preview: React.FC = () => {
         if (status.recording) {
           throw new Error('Cannot start preview while recording is active. Please stop recording first.');
         }
-        await apiService.startPreview({ mode: 'normal', transport: 'webrtc' });
+        const result = await apiService.startPreview({ transport: 'webrtc' });
+        if (result.status !== 'started') {
+          throw new Error('Failed to start preview');
+        }
       };
 
       if (wsConnected) {
         try {
-          await sendCommand('start_preview', { transport: 'webrtc' });
+          const result = await sendCommand('start_preview', { transport: 'webrtc' });
+          assertCommandSuccess(result, 'Failed to start preview');
         } catch (err) {
           if (isWsTransportError(err)) {
             await startPreviewViaRest();
@@ -100,50 +110,20 @@ export const Preview: React.FC = () => {
     }
   };
 
-  const handleStartCalibration = async () => {
-    setIsStarting(true);
-    try {
-      const startCalibrationViaRest = async () => {
-        const status = await apiService.getStatus();
-        if (status.recording) {
-          throw new Error('Cannot start calibration while recording is active. Please stop recording first.');
-        }
-        await apiService.startPreview({ mode: 'calibration', transport: 'webrtc' });
-      };
-
-      if (wsConnected) {
-        try {
-          await sendCommand('start_preview', { transport: 'webrtc' });
-        } catch (err) {
-          if (isWsTransportError(err)) {
-            await startCalibrationViaRest();
-          } else {
-            throw err;
-          }
-        }
-      } else {
-        await startCalibrationViaRest();
-      }
-      await new Promise(resolve => setTimeout(resolve, 500));
-    } catch (err: any) {
-      setError(err.message || 'Failed to start calibration');
-      setTimeout(() => setError(null), 5000);
-      console.error(err);
-    } finally {
-      setIsStarting(false);
-    }
-  };
-
   const handleStopPreview = async () => {
     setIsStopping(true);
     try {
       const stopPreviewViaRest = async () => {
-        await apiService.stopPreview();
+        const result = await apiService.stopPreview();
+        if (result.status !== 'stopped') {
+          throw new Error('Failed to stop preview');
+        }
       };
 
       if (wsConnected) {
         try {
-          await sendCommand('stop_preview');
+          const result = await sendCommand('stop_preview');
+          assertCommandSuccess(result, 'Failed to stop preview');
         } catch (err) {
           if (isWsTransportError(err)) {
             await stopPreviewViaRest();
@@ -172,12 +152,20 @@ export const Preview: React.FC = () => {
   }
 
   const isStreaming = previewStatus?.streaming;
+  const cam0Transport = previewStatus?.cam0_transport;
+  const cam1Transport = previewStatus?.cam1_transport;
+  const transportLabel =
+    cam0Transport && cam1Transport
+      ? cam0Transport === cam1Transport
+        ? cam0Transport.toUpperCase()
+        : `${cam0Transport.toUpperCase()} / ${cam1Transport.toUpperCase()}`
+      : 'N/A';
 
   return (
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Camera Preview</h1>
-        <p className="text-gray-600 mt-1">Live preview - Same FOV as recording (GPU crop + barrel correction + rotation)</p>
+        <p className="text-gray-600 mt-1">Live preview transport and stream health for both cameras</p>
       </div>
 
       {error && (
@@ -207,49 +195,23 @@ export const Preview: React.FC = () => {
         {!isStreaming ? (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
-              Start the preview stream to see what will be recorded. Preview shows the EXACT same field of view as your recordings.
+              Start preview to validate camera feeds before recording. Recording and preview remain mutually exclusive.
             </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4">
               <button
                 onClick={handleStartPreview}
                 disabled={isStarting}
                 className="bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors flex items-center justify-center"
               >
                 <Play className="w-5 h-5 mr-2" />
-                {isStarting ? 'Starting...' : 'Start Recording Preview'}
-              </button>
-
-              <button
-                onClick={handleStartCalibration}
-                disabled={isStarting}
-                className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors flex items-center justify-center"
-              >
-                <Eye className="w-5 h-5 mr-2" />
-                {isStarting ? 'Starting...' : 'Start Calibration Stream'}
+                {isStarting ? 'Starting...' : 'Start Preview'}
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm">
-                <p className="font-semibold mb-2">Recording Preview:</p>
-                <ul className="space-y-1 text-xs">
-                  <li>• 2880x1620 @ 30fps</li>
-                  <li>• GPU crop (56% FOV)</li>
-                  <li>• Barrel correction + rotation</li>
-                  <li>• SAME as recordings</li>
-                </ul>
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
-                <p className="font-semibold mb-2">Calibration Mode:</p>
-                <ul className="space-y-1 text-xs">
-                  <li>• Center 50% crop (1920x1080)</li>
-                  <li>• 25% FOV @ 30fps</li>
-                  <li>• 8 Mbps native 4K sharpness</li>
-                  <li>• For focus check</li>
-                </ul>
-              </div>
+            <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
+              <p className="font-semibold mb-1">Calibration workflow moved</p>
+              <p>Use the Panorama page for calibration and stitching controls.</p>
             </div>
           </div>
         ) : (
@@ -302,33 +264,17 @@ export const Preview: React.FC = () => {
 
       {isStreaming && (
         <div className={`px-4 py-3 rounded-lg text-sm ${
-          (previewStatus as any)?.mode === 'calibration'
-            ? 'bg-blue-50 border border-blue-200 text-blue-800'
+          cam0Transport === 'webrtc' || cam1Transport === 'webrtc'
+            ? 'bg-green-50 border border-green-200 text-green-800'
             : 'bg-yellow-50 border border-yellow-200 text-yellow-800'
         }`}>
-          {(previewStatus as any)?.mode === 'calibration' ? (
-            <>
-              <p className="font-semibold mb-1">Calibration Mode Active:</p>
-              <ul className="space-y-1">
-                <li>• <strong>1920x1080 @ 30fps</strong> - Native 4K center crop (25% FOV)</li>
-                <li>• <strong>8 Mbps</strong> - High quality encoding for maximum detail</li>
-                <li>• <strong>Center 50% each axis</strong> - Native 4K pixels, 4x sharper than downscaled preview</li>
-                <li>• Use this mode to fine-tune camera focus and check image quality</li>
-                <li>• Stream will stop when you start recording</li>
-              </ul>
-            </>
-          ) : (
-            <>
-              <p className="font-semibold mb-1">Recording Preview Active:</p>
-              <ul className="space-y-1">
-                <li>• <strong>2880x1620 @ 30fps</strong> - Same resolution as recordings</li>
-                <li>• <strong>GPU crop (56% FOV)</strong> - Same field of view as recordings</li>
-                <li>• <strong>Barrel correction + rotation</strong> - Same transformations as recordings</li>
-                <li>• What you see is what gets recorded</li>
-                <li>• Stream will stop automatically when you start recording</li>
-              </ul>
-            </>
-          )}
+          <p className="font-semibold mb-1">Live Preview Active</p>
+          <ul className="space-y-1">
+            <li>• Transport: <strong>{transportLabel}</strong></li>
+            <li>• Camera 0 stream: <strong>{previewStatus?.cam0_running ? 'active' : 'inactive'}</strong></li>
+            <li>• Camera 1 stream: <strong>{previewStatus?.cam1_running ? 'active' : 'inactive'}</strong></li>
+            <li>• Preview will stop automatically when recording starts</li>
+          </ul>
         </div>
       )}
 

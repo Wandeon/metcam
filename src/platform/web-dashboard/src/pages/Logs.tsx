@@ -11,6 +11,44 @@ interface LogData {
   message?: string;
 }
 
+interface StructuredAlert {
+  ts: string;
+  event_type: string;
+  severity: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+function parseStructuredAlert(line: string): StructuredAlert | null {
+  try {
+    const parsed = JSON.parse(line);
+    if (
+      parsed
+      && typeof parsed === 'object'
+      && typeof parsed.ts === 'string'
+      && typeof parsed.event_type === 'string'
+      && typeof parsed.severity === 'string'
+      && typeof parsed.message === 'string'
+    ) {
+      return parsed as StructuredAlert;
+    }
+  } catch {
+    // Not structured JSON.
+  }
+  return null;
+}
+
+function formatAlertTimestamp(value?: string): string {
+  if (!value) {
+    return 'Unknown time';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
 export function Logs() {
   const [selectedLog, setSelectedLog] = useState<LogType>('health');
   const [logData, setLogData] = useState<LogData | null>(null);
@@ -67,6 +105,12 @@ export function Logs() {
     { id: 'alerts' as LogType, label: 'Alerts', icon: AlertCircle },
     { id: 'watchdog' as LogType, label: 'Watchdog', icon: FileText },
   ];
+  const structuredAlerts = selectedLog === 'alerts'
+    ? (logData?.lines || [])
+      .map(parseStructuredAlert)
+      .filter((entry): entry is StructuredAlert => entry !== null)
+    : [];
+  const showStructuredAlerts = selectedLog === 'alerts' && structuredAlerts.length > 0;
 
   return (
     <div className="p-4 lg:p-8">
@@ -117,6 +161,32 @@ export function Logs() {
           <div className="bg-gray-900 text-white p-4 font-mono text-sm">
             {logData?.message ? (
               <div className="text-yellow-400">{logData.message}</div>
+            ) : showStructuredAlerts ? (
+              <div className="space-y-3 font-sans text-sm">
+                {structuredAlerts.map((entry, index) => {
+                  const severity = entry.severity.toLowerCase();
+                  const severityClass = severity === 'error'
+                    ? 'bg-red-900/40 border-red-700 text-red-100'
+                    : 'bg-yellow-900/40 border-yellow-700 text-yellow-100';
+                  return (
+                    <div
+                      key={`${entry.ts}-${entry.event_type}-${index}`}
+                      className={`border rounded-lg p-3 ${severityClass}`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-1">
+                        <span className="font-semibold">{entry.event_type}</span>
+                        <span className="text-xs opacity-80">{formatAlertTimestamp(entry.ts)}</span>
+                      </div>
+                      <div className="text-sm">{entry.message}</div>
+                      {entry.details && Object.keys(entry.details).length > 0 && (
+                        <pre className="mt-2 text-xs bg-black/30 p-2 rounded overflow-x-auto">
+                          {JSON.stringify(entry.details, null, 2)}
+                        </pre>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             ) : logData?.lines && logData.lines.length > 0 ? (
               <div className="space-y-1">
                 {logData.lines.map((line, index) => {
@@ -157,9 +227,9 @@ export function Logs() {
             <div className="text-sm text-blue-900">
               <p className="font-medium mb-1">About System Logs</p>
               <ul className="space-y-1 text-blue-800">
-                <li><strong>System Health:</strong> Storage, temperature, power mode, CPU frequency, and API status checks (runs every 5 minutes)</li>
-                <li><strong>Alerts:</strong> Important system warnings and errors that require attention</li>
-                <li><strong>Watchdog:</strong> Recording health monitoring - detects stalled recordings and process issues (runs every 2 minutes)</li>
+                <li><strong>System Health:</strong> Storage, temperature, power mode, CPU frequency, and API health checks</li>
+                <li><strong>Alerts:</strong> Structured operator alerts from recording guardrails and stop/integrity outcomes</li>
+                <li><strong>Watchdog:</strong> Recording health monitoring, including stalled pipelines and runtime anomalies</li>
               </ul>
             </div>
           </div>
