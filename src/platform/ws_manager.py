@@ -398,16 +398,20 @@ class ConnectionManager:
 
     async def _broadcast(self, subscribers: list[WebSocket], message: dict) -> None:
         text = json.dumps(message)
-        for ws in subscribers:
+        # Send concurrently so one slow/dead client doesn't block others.
+        async def _send_one(ws: WebSocket) -> None:
             try:
                 await ws.send_text(text)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Broadcast send failed ({ws.client}): {e}")
                 self.disconnect(ws)
+        await asyncio.gather(*[_send_one(ws) for ws in subscribers], return_exceptions=True)
 
     async def _send(self, websocket: WebSocket, message: dict) -> None:
         try:
             await websocket.send_text(json.dumps(message))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Send failed ({websocket.client}): {e}")
             self.disconnect(websocket)
 
     async def _send_error(self, websocket: WebSocket, code: str, message: str) -> None:
