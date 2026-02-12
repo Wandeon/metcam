@@ -18,6 +18,7 @@ function transformPreviewStatus(raw: StatusResponseV3): PreviewStatus {
     cam0_stream_kind: preview.cameras.camera_0.stream_kind || 'main_cam0',
     cam1_stream_kind: preview.cameras.camera_1.stream_kind || 'main_cam1',
     ice_servers: preview.ice_servers || [],
+    relay_ws_url: preview.relay?.ws_url,
   };
 }
 
@@ -244,6 +245,7 @@ export const Preview: React.FC = () => {
               username: s.username,
               credential: s.credential,
             }))}
+            relayWsUrl={previewStatus.relay_ws_url}
           />
           <CameraPreview
             key={`cam1-${streamKey}`}
@@ -259,6 +261,7 @@ export const Preview: React.FC = () => {
               username: s.username,
               credential: s.credential,
             }))}
+            relayWsUrl={previewStatus.relay_ws_url}
           />
         </div>
       )}

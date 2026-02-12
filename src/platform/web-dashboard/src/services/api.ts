@@ -114,6 +114,12 @@ export interface PreviewStatusV3 {
     camera_id: number;
     connection_id: string;
   }>;
+  relay?: {
+    enabled: boolean;
+    ws_url: string;
+    ingest: string;
+    mounts?: Record<string, boolean>;
+  };
 }
 
 export interface StatusResponseV3 {
@@ -231,6 +237,7 @@ export interface PreviewStatus {
   cam0_stream_kind?: 'main_cam0';
   cam1_stream_kind?: 'main_cam1';
   ice_servers?: Array<{ urls: string[]; username?: string; credential?: string }>;
+  relay_ws_url?: string;
 }
 
 export interface PreviewStartResponse {

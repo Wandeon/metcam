@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { Video, AlertCircle, Maximize2, ZoomIn, ZoomOut, RotateCcw, X, ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { webRtcService, type StreamKind } from '@/services/webrtc';
+import { go2RtcService, type StreamKind as Go2RtcStreamKind } from '@/services/go2rtc';
 
 interface CameraPreviewProps {
   cameraId: number;
@@ -12,6 +13,7 @@ interface CameraPreviewProps {
   transport?: 'hls' | 'webrtc';
   streamKind?: StreamKind;
   iceServers?: RTCIceServer[];
+  relayWsUrl?: string;
 }
 
 export const CameraPreview: React.FC<CameraPreviewProps> = ({
@@ -22,6 +24,7 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
   transport = 'hls',
   streamKind,
   iceServers,
+  relayWsUrl,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,8 +43,31 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
     });
   }, []);
 
+  // go2rtc relay mode -- uses go2rtc on VPS-02 instead of broken webrtcbin
   useEffect(() => {
-    if (transport !== 'webrtc') return;
+    if (transport !== 'webrtc' || !relayWsUrl || !streamKind) return;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    setLoading(true);
+    setError(null);
+
+    go2RtcService.startStream(relayWsUrl, streamKind as Go2RtcStreamKind, video)
+      .then(() => setLoading(false))
+      .catch((err) => {
+        console.error('go2rtc start failed:', err);
+        setError(err?.message || 'Failed to start relay stream');
+        setLoading(false);
+      });
+
+    return () => {
+      go2RtcService.stopStream(streamKind as Go2RtcStreamKind);
+    };
+  }, [transport, streamKind, relayWsUrl]);
+
+  useEffect(() => {
+    if (transport !== 'webrtc' || relayWsUrl) return;
 
     const video = videoRef.current;
     if (!video) return;
