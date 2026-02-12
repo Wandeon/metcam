@@ -115,7 +115,11 @@ class TestPreviewService(unittest.TestCase):
     def setUp(self) -> None:
         EVENT_LOG.clear()
         self.prev_transport_mode = os.environ.get("PREVIEW_TRANSPORT_MODE")
+        self.prev_stun_server = os.environ.get("WEBRTC_STUN_SERVER")
+        self.prev_turn_server = os.environ.get("WEBRTC_TURN_SERVER")
         os.environ["PREVIEW_TRANSPORT_MODE"] = "hls"
+        os.environ["WEBRTC_STUN_SERVER"] = "stun://stun.l.google.com:19302"
+        os.environ.pop("WEBRTC_TURN_SERVER", None)
         self.module, self.exposure_stub = _load_preview_service_module()
         self.tmp = tempfile.TemporaryDirectory()
         self.hls_dir = Path(self.tmp.name) / "hls"
@@ -127,6 +131,14 @@ class TestPreviewService(unittest.TestCase):
             os.environ.pop("PREVIEW_TRANSPORT_MODE", None)
         else:
             os.environ["PREVIEW_TRANSPORT_MODE"] = self.prev_transport_mode
+        if self.prev_stun_server is None:
+            os.environ.pop("WEBRTC_STUN_SERVER", None)
+        else:
+            os.environ["WEBRTC_STUN_SERVER"] = self.prev_stun_server
+        if self.prev_turn_server is None:
+            os.environ.pop("WEBRTC_TURN_SERVER", None)
+        else:
+            os.environ["WEBRTC_TURN_SERVER"] = self.prev_turn_server
         self.tmp.cleanup()
 
     def test_start_preview_recreates_hls_directory(self) -> None:
@@ -165,6 +177,29 @@ class TestPreviewService(unittest.TestCase):
         self.assertNotIn("exposure:stop", EVENT_LOG)
         self.assertEqual(self.service.gst_manager.stop_calls[0]["name"], "preview_cam0")
         self.assertFalse(self.service.gst_manager.stop_calls[0]["wait_for_eos"])
+
+    def test_get_ice_servers_returns_browser_compatible_stun_url(self) -> None:
+        self.assertEqual(
+            self.service.get_ice_servers(),
+            [{"urls": ["stun:stun.l.google.com:19302"]}],
+        )
+
+    def test_get_ice_servers_parses_turn_credentials_for_browser(self) -> None:
+        os.environ["WEBRTC_TURN_SERVER"] = "turn://user:pass@turn.example.com:3478?transport=udp"
+        service = self.module.PreviewService(hls_base_dir=str(self.hls_dir))
+        service.gst_manager = _FakeGStreamerManager()
+
+        self.assertEqual(
+            service.get_ice_servers(),
+            [
+                {"urls": ["stun:stun.l.google.com:19302"]},
+                {
+                    "urls": ["turn:turn.example.com:3478?transport=udp"],
+                    "username": "user",
+                    "credential": "pass",
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":

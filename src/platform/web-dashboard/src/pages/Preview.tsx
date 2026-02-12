@@ -239,7 +239,11 @@ export const Preview: React.FC = () => {
             framerate={(previewStatus as any).framerate || 30}
             transport={previewStatus.cam0_transport}
             streamKind={previewStatus.cam0_stream_kind}
-            iceServers={previewStatus.ice_servers?.map((s) => ({ urls: s.urls }))}
+            iceServers={previewStatus.ice_servers?.map((s) => ({
+              urls: s.urls,
+              username: s.username,
+              credential: s.credential,
+            }))}
           />
           <CameraPreview
             key={`cam1-${streamKey}`}
@@ -250,7 +254,11 @@ export const Preview: React.FC = () => {
             framerate={(previewStatus as any).framerate || 30}
             transport={previewStatus.cam1_transport}
             streamKind={previewStatus.cam1_stream_kind}
-            iceServers={previewStatus.ice_servers?.map((s) => ({ urls: s.urls }))}
+            iceServers={previewStatus.ice_servers?.map((s) => ({
+              urls: s.urls,
+              username: s.username,
+              credential: s.credential,
+            }))}
           />
         </div>
       )}

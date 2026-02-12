@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlparse
 
 from gstreamer_manager import GStreamerManager, PipelineState
 import pipeline_builders
@@ -92,12 +93,56 @@ class PreviewService:
         except Exception:
             return False
 
+    @staticmethod
+    def _ice_server_for_browser(url: str) -> dict[str, Any] | None:
+        """Return an RTCIceServer dict for browsers.
+
+        Note: GStreamer webrtcbin uses stun/turn URLs like `stun://host:port`,
+        but browsers expect `stun:host:port` (no `//`). This helper normalizes
+        the common schemes and extracts TURN credentials into `username` and
+        `credential` fields when provided.
+        """
+        raw = (url or "").strip()
+        if not raw:
+            return None
+
+        # Already in browser-ish form (e.g., "stun:host:port").
+        # We intentionally do not parse credentials from this variant.
+        if "://" not in raw:
+            return {"urls": [raw]}
+
+        parsed = urlparse(raw)
+        scheme = (parsed.scheme or "").lower()
+        host = parsed.hostname
+        port = parsed.port
+        if scheme not in {"stun", "stuns", "turn", "turns"} or not host:
+            return None
+
+        browser_url = f"{scheme}:{host}"
+        if port:
+            browser_url += f":{port}"
+        if scheme in {"turn", "turns"} and parsed.query:
+            browser_url += f"?{parsed.query}"
+
+        server: dict[str, Any] = {"urls": [browser_url]}
+        if scheme in {"turn", "turns"}:
+            if parsed.username:
+                server["username"] = parsed.username
+            if parsed.password:
+                server["credential"] = parsed.password
+        return server
+
     def get_ice_servers(self) -> list[dict[str, Any]]:
+        """Return browser-compatible RTCIceServer config (for RTCPeerConnection)."""
         servers: list[dict[str, Any]] = []
         if self.stun_server:
-            servers.append({"urls": [self.stun_server]})
+            server = self._ice_server_for_browser(self.stun_server)
+            if server:
+                servers.append(server)
         if self.turn_server:
-            servers.append({"urls": [self.turn_server]})
+            server = self._ice_server_for_browser(self.turn_server)
+            if server:
+                servers.append(server)
         return servers
 
     def get_status(self) -> Dict[str, Any]:

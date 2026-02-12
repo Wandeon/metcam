@@ -81,7 +81,7 @@ export interface RecordingStatusV3 {
 export interface PreviewStatusV3 {
   preview_active: boolean;
   transport_mode?: 'hls' | 'webrtc' | 'dual';
-  ice_servers?: Array<{ urls: string[] }>;
+  ice_servers?: Array<{ urls: string[]; username?: string; credential?: string }>;
   cameras: {
     camera_0: {
       active: boolean;
@@ -230,7 +230,7 @@ export interface PreviewStatus {
   cam1_transport?: 'hls' | 'webrtc';
   cam0_stream_kind?: 'main_cam0';
   cam1_stream_kind?: 'main_cam1';
-  ice_servers?: Array<{ urls: string[] }>;
+  ice_servers?: Array<{ urls: string[]; username?: string; credential?: string }>;
 }
 
 export interface PreviewStartResponse {
