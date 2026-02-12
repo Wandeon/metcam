@@ -200,6 +200,28 @@ class TestPipelineBuilders(unittest.TestCase):
         self.assertIn("stun-server=stun://stun.example.org:3478", pipeline)
         self.assertIn("turn-server=turn://user:pass@turn.example.org:3478", pipeline)
 
+    def test_build_preview_rtsp_pipeline_for_gst_rtsp_server(self) -> None:
+        pipeline = self.module.build_preview_rtsp_pipeline(
+            camera_id=0,
+            config_path=str(self.config_path),
+        )
+        # GstRtspServer factory requires parentheses wrapping
+        self.assertTrue(pipeline.strip().startswith("("))
+        self.assertTrue(pipeline.strip().endswith(")"))
+        # Must use pay0 naming for RTSP server to find payloader
+        self.assertIn("name=pay0", pipeline)
+        self.assertIn("rtph264pay", pipeline)
+        # Same encoder settings as preview WebRTC
+        self.assertIn("speed-preset=ultrafast", pipeline)
+        self.assertIn("tune=zerolatency", pipeline)
+        self.assertIn("bitrate=6000", pipeline)
+        # Must NOT contain webrtcbin
+        self.assertNotIn("webrtcbin", pipeline)
+        self.assertNotIn("webrtc.", pipeline)
+        # Camera source present
+        self.assertIn("nvarguscamerasrc", pipeline)
+        self.assertIn("sensor-id=0", pipeline)
+
     def test_build_panorama_capture_pipeline_contains_appsink_branch(self) -> None:
         pipeline = self.module.build_panorama_capture_pipeline(camera_id=0, config_path=str(self.config_path))
         self.assertIn("tee name=t", pipeline)

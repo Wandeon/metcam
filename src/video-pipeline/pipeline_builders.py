@@ -320,6 +320,38 @@ def build_preview_webrtc_pipeline(
     return pipeline
 
 
+def build_preview_rtsp_pipeline(
+    camera_id: int,
+    config_path: str | None = None,
+) -> str:
+    """Build GStreamer launch string for GstRtspServer media factory.
+
+    Wrapped in parentheses (required by GstRtspServer) with ``name=pay0``
+    on the RTP payloader.  Encoder settings match the WebRTC preview chain.
+    """
+
+    config = load_camera_config(config_path)
+    cam_config = config["cameras"][str(camera_id)]
+
+    source_section, _, _ = _build_camera_source(camera_id, cam_config)
+
+    pipeline = "".join(
+        [
+            "( ",
+            source_section,
+            "x264enc name=enc speed-preset=ultrafast tune=zerolatency threads=0 ",
+            "bitrate=6000 key-int-max=60 b-adapt=false bframes=0 ",
+            "byte-stream=true aud=true intra-refresh=false ",
+            "option-string=repeat-headers=1:scenecut=0:open-gop=0 ! ",
+            "h264parse config-interval=1 disable-passthrough=true ! ",
+            "rtph264pay name=pay0 pt=96 config-interval=1 aggregate-mode=zero-latency ",
+            ")",
+        ]
+    )
+
+    return pipeline
+
+
 def build_panorama_capture_pipeline(
     camera_id: int,
     config_path: str = None
