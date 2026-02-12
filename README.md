@@ -17,6 +17,7 @@ Professional dual-camera recording system for football matches on NVIDIA Jetson 
 - ✅ **System-level mutual exclusion** - recording and preview never run simultaneously
 - ✅ File-based pipeline locking with automatic recovery
 - ✅ Dual-stack preview transport (WebRTC primary + HLS fallback)
+- ✅ **go2rtc WebRTC relay** for low-latency remote preview through VPS reverse proxy
 - ✅ High-quality recording (12Mbps x264, 10-minute segments)
 - ✅ Recording management (list, download, delete via web UI)
 - ✅ FastAPI REST API with Prometheus metrics
@@ -121,10 +122,25 @@ splitmuxsink (10-minute segments)
   → /mnt/recordings/{match_id}/segments/
 ```
 
+### WebRTC Preview via go2rtc Relay
+
+When accessed through the VPS reverse proxy (`vid.nk-otok.hr`), WebRTC preview uses a **go2rtc relay** to bypass GStreamer 1.20's broken webrtcbin DTLS implementation:
+
+```
+Browser ←—WebRTC—→ go2rtc (VPS-02) ←—RTSP—→ GstRtspServer (Jetson)
+                     :8555/udp                  :8554 (Tailscale)
+```
+
+- **Jetson** serves RTSP via GstRtspServer at `rtsp://100.78.19.7:8554/cam{N}`
+- **go2rtc** (on VPS-02) pulls RTSP on-demand and serves WebRTC to browsers
+- **Feature-flagged**: enabled by `WEBRTC_RELAY_URL` env var; without it, direct WebRTC is used
+- UI-facing transport stays `"webrtc"` — RTSP is internal ingest only
+
 ### Core Components
 - **pipeline_manager.py** - System-level mutual exclusion with file locks (CRITICAL)
 - **gstreamer_manager.py** - Thread-safe in-process GStreamer pipeline manager
-- **pipeline_builders.py** - Pipeline string construction for recording and preview
+- **pipeline_builders.py** - Pipeline string construction for recording, preview (HLS/WebRTC/RTSP)
+- **preview_service.py** - Dual-camera preview with transport abstraction (HLS/WebRTC/RTSP relay)
 - **recording_service.py** - Dual-camera recording coordinator
 - **simple_api_v3.py** - FastAPI REST server with pipeline lock integration
 
@@ -141,12 +157,12 @@ splitmuxsink (10-minute segments)
 This prevents the CPU from being overwhelmed by running 4 pipelines simultaneously.
 
 ### Performance Characteristics
-- Preview streaming (WebRTC): low-latency live preview (target sub-second path)
+- Preview streaming (WebRTC via go2rtc relay): sub-second latency, even through VPS proxy
+- Preview streaming (HLS fallback): ~5-8 seconds latency
 - Recording: 25-30fps (both cameras @ 12Mbps)
 - CPU usage during recording: 250-350% (2-3 cores)
 - Recording start latency: ~500ms (including lock acquisition)
 - Recording stop latency: ~2s (graceful EOS)
-- HLS fallback latency (when enabled): ~5-8 seconds
 
 ## Documentation
 
@@ -239,7 +255,7 @@ http://<your-jetson-ip>
 ```
 
 Features:
-- Live preview from both cameras (WebRTC, with HLS fallback during dual-stack rollout)
+- Live preview from both cameras (WebRTC via go2rtc relay, with HLS fallback)
 - Start/stop recording with match details
 - View recording status and metrics
 - Download or delete recordings
@@ -289,6 +305,14 @@ sudo systemctl restart footballvision-api-enhanced
    # If needed, restart API service to force release
    ```
 
+4. **WebRTC preview black/fails through VPS:** Check go2rtc relay
+   ```bash
+   # Check go2rtc is running on VPS-02
+   ssh root@vps-02 "docker ps | grep go2rtc"
+   # Check RTSP is reachable from VPS-02
+   ssh root@vps-02 "curl -s http://127.0.0.1:1984/api/streams"
+   ```
+
 See **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** for comprehensive solutions.
 
 ## Project Structure
@@ -297,21 +321,26 @@ See **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** for comprehensive solut
 footballvision-pro/
 ├── deploy/                       # Deployment infrastructure
 │   ├── install-complete.sh      # One-command installation
+│   ├── deploy-safe.sh           # Safe production updates with rollback
 │   ├── validate.sh              # System validation
 │   ├── quick-test.sh            # Functionality tests
 │   ├── performance-test.sh      # Performance validation
 │   ├── config/
-│   │   └── Caddyfile            # Web server configuration
+│   │   └── Caddyfile            # Jetson Caddy configuration
 │   └── systemd/
 │       └── footballvision-api-enhanced.service
 ├── src/
 │   ├── platform/
 │   │   ├── simple_api_v3.py     # FastAPI server
 │   │   └── web-dashboard/       # React web UI
+│   │       └── src/services/
+│   │           ├── api.ts       # REST API client
+│   │           └── go2rtc.ts    # go2rtc WebRTC signaling service
 │   └── video-pipeline/
 │       ├── pipeline_manager.py  # Mutex system
 │       ├── gstreamer_manager.py # GStreamer wrapper
-│       ├── pipeline_builders.py # Pipeline construction
+│       ├── pipeline_builders.py # Pipeline construction (recording + preview + RTSP)
+│       ├── preview_service.py   # Preview with transport abstraction + RTSP relay
 │       └── recording_service.py # Recording coordinator
 ├── docs/
 │   ├── HARDWARE_SETUP.md        # Hardware guide
@@ -319,6 +348,22 @@ footballvision-pro/
 │   └── ARCHITECTURE.md          # System design
 └── requirements.txt             # Python dependencies
 ```
+
+## Remote Access (VPS Proxy)
+
+The system is accessible remotely via VPS-02 reverse proxy:
+
+- **URL**: `https://vid.nk-otok.hr`
+- **Proxy chain**: Browser → VPS-02 Caddy → Tailscale → Jetson
+
+**Infrastructure on VPS-02** (`152.53.206.126` / Tailscale `100.82.2.46`):
+- **Caddy**: Reverse proxies `/api/*` and `/ws` to Jetson FastAPI, `/go2rtc/api/*` to local go2rtc
+- **go2rtc** (`alexxit/go2rtc`): Docker container with `network_mode: host`, WebRTC on `:8555/udp`, API on `127.0.0.1:1984`
+- **Streams**: `cam0` and `cam1` configured as on-demand RTSP pulls from Jetson
+
+**Infrastructure on Jetson** (`100.78.19.7` via Tailscale):
+- **GstRtspServer**: Serves RTSP at `rtsp://100.78.19.7:8554/cam{N}` (only when preview is active)
+- **Env vars**: `WEBRTC_RELAY_URL`, `RTSP_BIND_ADDRESS`, `RTSP_PORT` in systemd override
 
 ## License
 

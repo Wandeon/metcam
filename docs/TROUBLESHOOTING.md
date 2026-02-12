@@ -889,6 +889,101 @@ ping <jetson-ip>
 
 ---
 
+## WebRTC Preview / go2rtc Relay Issues
+
+### Issue: Black Screen or "go2rtc start failed" When Previewing Through VPS
+
+**Symptom:** Preview works on local network but shows black screen or WebSocket error through `vid.nk-otok.hr`
+
+**Diagnostic steps:**
+
+1. **Check go2rtc container on VPS-02**
+   ```bash
+   ssh root@vps-02 "docker ps | grep go2rtc"
+   # Should show go2rtc-metcam container running
+   ```
+
+2. **Check go2rtc streams are configured**
+   ```bash
+   ssh root@vps-02 "curl -s http://127.0.0.1:1984/api/streams | python3 -m json.tool"
+   # Should show cam0 and cam1 with RTSP sources
+   ```
+
+3. **Check RTSP is reachable from VPS-02**
+   ```bash
+   ssh root@vps-02 "curl -s http://127.0.0.1:1984/api/streams?src=cam0"
+   # If preview is active on Jetson, should show active producers
+   ```
+
+4. **Check Caddy routes on VPS-02**
+   ```bash
+   ssh root@vps-02 "curl -s -o /dev/null -w '%{http_code}' https://vid.nk-otok.hr/go2rtc/api/streams"
+   # Should return 200
+   ```
+
+**Solutions:**
+
+1. **go2rtc container not running**
+   ```bash
+   ssh root@vps-02 "docker start go2rtc-metcam"
+   ```
+
+2. **Caddy routing incorrect** — The `/go2rtc/` prefix must be stripped correctly:
+   ```caddy
+   # CORRECT: handle + uri strip_prefix
+   handle /go2rtc/api/ws* {
+       uri strip_prefix /go2rtc
+       reverse_proxy http://127.0.0.1:1984
+   }
+
+   # WRONG: handle_path strips too much
+   handle_path /go2rtc/api/ws* {
+       reverse_proxy http://127.0.0.1:1984
+   }
+   ```
+
+3. **Preview not started on Jetson** — RTSP mounts only exist when preview is active:
+   ```bash
+   curl http://100.78.19.7:8000/api/v1/preview
+   # If not active, start preview first
+   curl -X POST http://100.78.19.7:8000/api/v1/preview
+   ```
+
+4. **Tailscale connectivity between VPS-02 and Jetson**
+   ```bash
+   ssh root@vps-02 "ping -c 3 100.78.19.7"
+   ```
+
+### Issue: Preview Works Locally but Not Through VPS (WebRTC)
+
+**Symptom:** Direct WebRTC preview on local network works, but through VPS shows black screen
+
+**Cause:** GStreamer 1.20's `webrtcbin` has a DTLS bug when TURN relay candidates are selected. This is a known issue that cannot be fixed on JetPack 6.1.
+
+**Solution:** The go2rtc relay architecture bypasses this entirely. Ensure `WEBRTC_RELAY_URL` is set:
+```bash
+ssh mislav@100.78.19.7 "cat /etc/systemd/system/footballvision-api-enhanced.service.d/webrtc-turn.conf"
+# Should show:
+# Environment="WEBRTC_RELAY_URL=wss://vid.nk-otok.hr/go2rtc"
+# Environment="RTSP_BIND_ADDRESS=100.78.19.7"
+# Environment="RTSP_PORT=8554"
+```
+
+### Issue: GstRtspServer Not Available
+
+**Symptom:** API logs show `GstRtspServer not available` or RTSP mount failures
+
+**Solution:**
+```bash
+# Install GstRtspServer on Jetson
+ssh root@100.78.19.7 "apt install -y libgstrtspserver-1.0-0 gir1.2-gstrtspserver-1.0 gstreamer1.0-rtsp"
+
+# Verify Python bindings
+ssh mislav@100.78.19.7 "python3 -c \"import gi; gi.require_version('GstRtspServer','1.0'); from gi.repository import GstRtspServer; print('OK')\""
+```
+
+---
+
 ## Advanced Debugging
 
 ### Enable Debug Logging
@@ -1016,5 +1111,5 @@ If issues persist:
 
 ---
 
-**Version:** 3.0
-**Last Updated:** 2025-10-24
+**Version:** 3.1
+**Last Updated:** 2026-02-12

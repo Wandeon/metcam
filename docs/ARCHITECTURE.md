@@ -1,6 +1,6 @@
 # FootballVision Pro - Architecture v3 Complete
 
-## Date: October 22, 2025
+## Date: October 22, 2025 (updated February 2026)
 
 ## Overview
 
@@ -68,15 +68,18 @@ Successfully redesigned FootballVision Pro from **subprocess-based scripts** to 
      - Force stop for emergencies
      - Per-camera status tracking
 
-4. **preview_service.py** (7KB)
+4. **preview_service.py** (12KB)
    - Location: `/home/mislav/footballvision-pro/src/video-pipeline/`
-   - Purpose: Dual-camera HLS preview service
+   - Purpose: Dual-camera preview with transport abstraction
    - Features:
      - Instant start/stop
      - Per-camera control
      - Restart capability
      - Independent from recording
-     - HLS segments in `/dev/shm/hls/` (served via `/hls/cam{N}.m3u8`)
+     - **Transport modes**: HLS (`/dev/shm/hls/cam{N}.m3u8`), WebRTC (direct), RTSP relay (via GstRtspServer → go2rtc)
+     - **go2rtc relay**: Feature-flagged by `WEBRTC_RELAY_URL` env var
+     - GstRtspServer with dedicated GLib.MainLoop daemon thread
+     - `rtsp_mount_active` dict for explicit mount lifecycle tracking
 
 5. **pipeline_manager.py** (8KB) ⭐ NEW
    - Location: `/home/mislav/footballvision-pro/src/video-pipeline/`
@@ -373,14 +376,63 @@ print(mgr.list_pipelines())
 \""
 ```
 
-## Next Steps
+## WebRTC Preview via go2rtc Relay (February 2026)
 
-1. **Run automated test** to validate architecture
-2. **Test recording survival** across page refreshes
-3. **Update systemd service** once validated
-4. **Add health monitoring** (pipeline heartbeat checks)
-5. **Add auto-recovery** on pipeline errors
-6. **Consider adding metrics** (frame count, dropped frames, bitrate)
+### Problem
+
+GStreamer 1.20's `webrtcbin` has a DTLS bug: when TURN relay candidates are selected (common through VPS reverse proxy chains), DTLS handshake data is silently dropped by `nicesink`, causing permanent black screens. This cannot be fixed without upgrading GStreamer (not available on JetPack 6.1).
+
+### Solution: go2rtc as External WebRTC Relay
+
+Instead of using `webrtcbin` for browser-facing WebRTC, the Jetson serves RTSP via `GstRtspServer` over the Tailscale mesh, and `go2rtc` on VPS-02 handles WebRTC negotiation with browsers.
+
+```
+Browser ←—WebRTC (wss)—→ VPS-02 Caddy ←—WS—→ go2rtc ←—RTSP—→ Jetson GstRtspServer
+          vid.nk-otok.hr   :443            :1984        :8554 (Tailscale)
+```
+
+### Components
+
+**Jetson (preview_service.py):**
+- `GstRtspServer` runs in a dedicated `GLib.MainLoop` daemon thread
+- Mounts RTSP endpoints at `/cam0` and `/cam1` when preview starts
+- Uses `build_preview_rtsp_pipeline()` from `pipeline_builders.py`
+- Feature-flagged by `WEBRTC_RELAY_URL` env var
+- When relay is configured, transport defaults to `webrtc` which triggers RTSP mount
+
+**VPS-02 (go2rtc container):**
+- Docker image `alexxit/go2rtc` with `network_mode: host`
+- Streams configured as on-demand RTSP: `rtsp://100.78.19.7:8554/cam0` and `cam1`
+- WebRTC signaling on `127.0.0.1:1984`, WebRTC media on `:8555/udp`
+- Caddy routes: `/go2rtc/api/ws*` and `/go2rtc/api/webrtc*` → `uri strip_prefix /go2rtc` → `localhost:1984`
+
+**Frontend (go2rtc.ts):**
+- `Go2RtcService` class handles WebSocket signaling with go2rtc
+- Protocol: `webrtc/offer` → `webrtc/answer` + `webrtc/candidate` exchanges
+- Candidates are raw SDP strings (not JSON objects)
+- Integrated into `CameraPreview.tsx` via `relayWsUrl` prop
+
+### RTSP Pipeline
+
+```
+nvarguscamerasrc (4K@30fps NV12, NVMM) →
+nvvidconv [VIC crop] →
+nvvidconv [color conversion] (NVMM NV12 → CPU I420) →
+videorate (30 fps) →
+x264enc (6 Mbps, ultrafast, zerolatency) →
+h264parse (config-interval=1) →
+rtph264pay name=pay0 pt=96 (aggregate-mode=zero-latency)
+```
+
+### Configuration
+
+Jetson systemd override (`/etc/systemd/system/footballvision-api-enhanced.service.d/webrtc-turn.conf`):
+```ini
+[Service]
+Environment="WEBRTC_RELAY_URL=wss://vid.nk-otok.hr/go2rtc"
+Environment="RTSP_BIND_ADDRESS=100.78.19.7"
+Environment="RTSP_PORT=8554"
+```
 
 ## Files Summary
 
@@ -389,14 +441,18 @@ print(mgr.list_pipelines())
 - `/home/mislav/footballvision-pro/src/video-pipeline/pipeline_builders.py`
 - `/home/mislav/footballvision-pro/src/video-pipeline/pipeline_manager.py` ⭐ (Mutual Exclusion)
 - `/home/mislav/footballvision-pro/src/video-pipeline/recording_service.py`
-- `/home/mislav/footballvision-pro/src/video-pipeline/preview_service.py`
+- `/home/mislav/footballvision-pro/src/video-pipeline/preview_service.py` (+ GstRtspServer relay integration)
 - `/home/mislav/footballvision-pro/src/video-pipeline/camera_config_manager.py`
 - `/home/mislav/footballvision-pro/src/platform/simple_api_v3.py`
+- `/home/mislav/footballvision-pro/src/platform/web-dashboard/src/services/go2rtc.ts` (go2rtc signaling)
 
 **State files** (created at runtime):
 - `/var/lock/footballvision/pipeline_state.json` (Pipeline lock state)
 - `/tmp/footballvision_recording_state.json` (Recording state persistence)
 
-## Implementation Complete ✅
+## Implementation Status
 
-All core components created, tested for syntax, and ready for integration testing.
+- ✅ V3 architecture (in-process GStreamer, mutual exclusion, recording/preview)
+- ✅ WebRTC preview via go2rtc relay (February 2026)
+- ✅ 94 backend tests passing
+- ✅ Deployed and verified through VPS proxy chain

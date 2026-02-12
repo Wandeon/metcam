@@ -8,7 +8,7 @@ This directory contains the in-process GStreamer pipeline implementation used by
 - `pipeline_builders.py` – Generates canonical recording and preview pipeline strings with VIC hardware-accelerated cropping.
 - `pipeline_manager.py` ⭐ – **System-level mutual exclusion** using file locks in `/var/lock/footballvision/`. Ensures recording and preview never run simultaneously.
 - `recording_service.py` – Dual-camera recorder with 10 s protection, state persistence, and timestamped MP4 segments.
-- `preview_service.py` – Dual-camera HLS preview (`/dev/shm/hls/cam{N}.m3u8`) with per-camera control and restart support.
+- `preview_service.py` – Dual-camera preview with transport abstraction (HLS, WebRTC, RTSP relay via GstRtspServer). go2rtc relay mode feature-flagged by `WEBRTC_RELAY_URL` env var.
 - `camera_config_manager.py` – Loads and atomically persists `config/camera_config.json` values.
 
 ## Current Pipelines (Hardware Accelerated)
@@ -48,6 +48,28 @@ x264enc (6 Mbps VBR, byte-stream=true) →
 h264parse (config-interval=1) →
 hlssink2 (/dev/shm/hls/cam{N}.m3u8, 2 s segments)
 ```
+
+### RTSP Preview Pipeline (for go2rtc Relay)
+
+When `WEBRTC_RELAY_URL` is configured, preview uses GstRtspServer instead of HLS/WebRTC. This pipeline is served as RTSP and consumed by go2rtc on VPS-02, which handles WebRTC negotiation with browsers.
+
+```
+( nvarguscamerasrc (3840×2160 @ 30 fps NV12, memory:NVMM) →
+  nvvidconv [VIC crop in NVMM] →
+  nvvidconv [color conversion] (NVMM NV12 → CPU I420) →
+  videorate (30 fps) →
+  x264enc (6 Mbps, ultrafast, zerolatency, byte-stream=true) →
+  h264parse (config-interval=1) →
+  rtph264pay name=pay0 pt=96 (aggregate-mode=zero-latency) )
+```
+
+**Key differences from HLS pipeline:**
+- Wrapped in parentheses `( ... )` — required by GstRtspServer media factory
+- `rtph264pay name=pay0` instead of `hlssink2` — RTP payloading for RTSP
+- `byte-stream=true` + `config-interval=1` — ensures SPS/PPS in-band for RTSP clients
+- Encoder matches preview quality (6 Mbps, not recording's 30 Mbps)
+
+**RTSP mount points:** `rtsp://<RTSP_BIND_ADDRESS>:<RTSP_PORT>/cam{N}` (e.g., `rtsp://100.78.19.7:8554/cam0`)
 
 ## ⚠️ CRITICAL: nvvidconv Crop Coordinate System
 
@@ -205,6 +227,7 @@ CPU [65%@1344,67%@1344,...]  ← Moderate CPU usage
   - Locks persist across crashes and are automatically cleaned up after 5 minutes of staleness
 - Recording segments are written to `/mnt/recordings/<match>/segments/` and roll every 600 s.
 - Preview segments live in `/dev/shm/hls/` (tmpfs) and are served via Caddy at `/hls/cam{N}.m3u8`.
+- **RTSP relay mode** (when `WEBRTC_RELAY_URL` is set): GstRtspServer mounts RTSP endpoints at `/cam{N}` on `RTSP_BIND_ADDRESS:RTSP_PORT`. go2rtc on VPS-02 pulls these on-demand and serves WebRTC to browsers. RTSP mounts are created/destroyed with preview start/stop. The `rtsp_mount_active` dict in `preview_service.py` tracks mount lifecycle explicitly (GStreamerManager's active status doesn't apply to RTSP factory pipelines).
 
 ## Brightness and Exposure Control
 

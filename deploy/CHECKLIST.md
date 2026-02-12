@@ -191,6 +191,33 @@ Verify:
 
 ---
 
+## 🔗 WebRTC Relay Verification (go2rtc)
+
+If the system is configured for remote access via VPS-02 reverse proxy:
+
+### Jetson Configuration
+- [ ] GstRtspServer packages installed: `dpkg -l | grep gstrtspserver`
+- [ ] Systemd override exists: `cat /etc/systemd/system/footballvision-api-enhanced.service.d/webrtc-turn.conf`
+- [ ] `WEBRTC_RELAY_URL` set to `wss://vid.nk-otok.hr/go2rtc`
+- [ ] `RTSP_BIND_ADDRESS` set to Tailscale IP (`100.78.19.7`)
+- [ ] `RTSP_PORT` set to `8554`
+- [ ] API status shows relay block: `curl http://localhost:8000/api/v1/preview | python3 -m json.tool`
+
+### VPS-02 Configuration
+- [ ] go2rtc container running: `docker ps | grep go2rtc`
+- [ ] go2rtc config has cam0/cam1 RTSP streams: `cat /root/go2rtc/go2rtc.yaml`
+- [ ] go2rtc API reachable: `curl http://127.0.0.1:1984/api/streams`
+- [ ] Caddy routes configured for `/go2rtc/api/ws*` and `/go2rtc/api/webrtc*`
+
+### End-to-End Relay Test
+- [ ] Start preview on Jetson
+- [ ] Open `https://vid.nk-otok.hr` in browser
+- [ ] WebRTC preview shows live video (both cameras)
+- [ ] Stop preview — streams stop cleanly
+- [ ] Browser DevTools Network tab shows WebSocket to `/go2rtc/api/ws?src=cam0`
+
+---
+
 ## 📝 Known Limitations
 
 Be aware of these current system characteristics:
@@ -200,6 +227,7 @@ Be aware of these current system characteristics:
 - [ ] Understand: Both cameras must be connected before starting API service
 - [ ] Understand: nvargus-daemon occasionally needs restart after crashes
 - [ ] Understand: HLS preview has ~5-8 second latency (normal for HLS)
+- [ ] Understand: WebRTC preview through VPS requires go2rtc relay (GStreamer 1.20 webrtcbin DTLS bug)
 
 ---
 
@@ -282,5 +310,5 @@ You can now:
 
 ---
 
-**Version:** 3.0
-**Last Updated:** 2025-10-24
+**Version:** 3.1
+**Last Updated:** 2026-02-12

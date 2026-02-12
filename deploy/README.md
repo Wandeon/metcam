@@ -398,6 +398,87 @@ sudo rm -rf /dev/shm/hls
 
 ---
 
+## go2rtc Relay (VPS-02)
+
+The go2rtc relay enables low-latency WebRTC preview through the VPS reverse proxy, bypassing GStreamer 1.20's broken webrtcbin DTLS implementation.
+
+### VPS-02 Setup
+
+**go2rtc container:**
+```bash
+# Config location on VPS-02
+/root/go2rtc/go2rtc.yaml
+
+# Start container
+docker run -d --name go2rtc-metcam \
+  --network host \
+  --restart unless-stopped \
+  -v /root/go2rtc/go2rtc.yaml:/config/go2rtc.yaml \
+  alexxit/go2rtc
+
+# Check status
+docker logs go2rtc-metcam --tail 20
+curl http://127.0.0.1:1984/api/streams
+```
+
+**go2rtc.yaml:**
+```yaml
+streams:
+  cam0: rtsp://100.78.19.7:8554/cam0
+  cam1: rtsp://100.78.19.7:8554/cam1
+
+webrtc:
+  listen: ":8555"
+
+api:
+  listen: "127.0.0.1:1984"
+```
+
+**VPS-02 Caddyfile additions** (in `/etc/caddy/Caddyfile`, `vid.nk-otok.hr` block):
+```caddy
+handle /go2rtc/api/ws* {
+    uri strip_prefix /go2rtc
+    reverse_proxy http://127.0.0.1:1984
+}
+handle /go2rtc/api/webrtc* {
+    uri strip_prefix /go2rtc
+    reverse_proxy http://127.0.0.1:1984
+}
+```
+
+### Jetson Setup
+
+**Systemd override** (`/etc/systemd/system/footballvision-api-enhanced.service.d/webrtc-turn.conf`):
+```ini
+[Service]
+Environment="WEBRTC_RELAY_URL=wss://vid.nk-otok.hr/go2rtc"
+Environment="RTSP_BIND_ADDRESS=100.78.19.7"
+Environment="RTSP_PORT=8554"
+```
+
+**Required packages:**
+```bash
+sudo apt install -y libgstrtspserver-1.0-0 gir1.2-gstrtspserver-1.0 gstreamer1.0-rtsp
+```
+
+### Verification
+
+```bash
+# 1. Start preview on Jetson
+curl -X POST http://100.78.19.7:8000/api/v1/preview
+
+# 2. Check relay block in status
+curl http://100.78.19.7:8000/api/v1/preview | python3 -m json.tool
+# Should show "relay" block with "enabled": true
+
+# 3. Check go2rtc sees RTSP streams
+ssh root@vps-02 "curl -s http://127.0.0.1:1984/api/streams"
+
+# 4. Open browser to https://vid.nk-otok.hr → Preview should show live video
+```
+
+---
+
 ## Additional Resources
 
 - **Main README:** [../README.md](../README.md)
@@ -416,6 +497,6 @@ For issues, questions, or contributions:
 
 ---
 
-**Version:** 3.0
-**Last Updated:** 2025-10-24
+**Version:** 3.1
+**Last Updated:** 2026-02-12
 **Compatibility:** NVIDIA Jetson Orin Nano with JetPack 6.1+
