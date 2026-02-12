@@ -282,6 +282,7 @@ sudo systemctl daemon-reload
 ### 4) Restart API and verify health
 
 ```bash
+sudo systemctl reset-failed footballvision-api-enhanced || true
 sudo systemctl restart footballvision-api-enhanced
 systemctl is-active footballvision-api-enhanced
 curl -sS http://localhost:8000/api/v1/health
