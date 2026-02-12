@@ -13,6 +13,9 @@ psutil>=5.9.0
 prometheus-client>=0.20.0
 prometheus-fastapi-instrumentator>=7.0.0
 
+# Cloud Storage (R2 uploads)
+boto3>=1.34.0
+
 # GStreamer Python Bindings
 # Note: Install via system package manager (apt)
 # sudo apt install python3-gi gir1.2-gstreamer-1.0

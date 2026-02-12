@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""
+Cloudflare R2 upload service for FootballVision Pro.
+Uploads processed archive files to R2 bucket via S3-compatible API.
+"""
+
+import os
+import re
+import logging
+from pathlib import Path
+from typing import Dict, Optional
+from datetime import datetime
+
+import boto3
+from botocore.config import Config
+
+logger = logging.getLogger(__name__)
+
+# 100 MB multipart threshold / chunk size for large uploads
+_MULTIPART_THRESHOLD = 100 * 1024 * 1024
+_MULTIPART_CHUNKSIZE = 100 * 1024 * 1024
+
+
+class R2UploadService:
+    """
+    Uploads archive files to Cloudflare R2.
+    Configured via environment variables:
+      R2_ENDPOINT_URL   - S3-compatible endpoint
+      R2_ACCESS_KEY_ID  - R2 API token access key
+      R2_SECRET_ACCESS_KEY - R2 API token secret
+      R2_BUCKET_NAME    - Target bucket (default: metcam-recordings)
+    """
+
+    def __init__(self) -> None:
+        self.endpoint_url = os.getenv("R2_ENDPOINT_URL", "")
+        self.access_key = os.getenv("R2_ACCESS_KEY_ID", "")
+        self.secret_key = os.getenv("R2_SECRET_ACCESS_KEY", "")
+        self.bucket = os.getenv("R2_BUCKET_NAME", "metcam-recordings")
+
+        if not self.endpoint_url or not self.access_key or not self.secret_key:
+            logger.warning("R2 credentials not configured. Uploads will be skipped.")
+            self.enabled = False
+            self._client = None
+            return
+
+        self.enabled = True
+        self._client = boto3.client(
+            "s3",
+            endpoint_url=self.endpoint_url,
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key,
+            region_name="auto",
+            config=Config(
+                retries={"max_attempts": 3, "mode": "adaptive"},
+                max_pool_connections=2,
+            ),
+        )
+        logger.info(f"R2 upload service initialized: {self.bucket}")
+
+    def _build_key(self, match_id: str, filename: str) -> str:
+        """Build R2 object key: YYYY-MM/match_id/filename"""
+        date_match = re.search(r"(\d{8})", match_id)
+        if date_match:
+            d = date_match.group(1)
+            year_month = f"{d[:4]}-{d[4:6]}"
+        else:
+            year_month = datetime.now().strftime("%Y-%m")
+        return f"{year_month}/{match_id}/{filename}"
+
+    def upload_file(self, local_file: Path, key: str) -> bool:
+        """Upload a single file to R2 with multipart for large files."""
+        if not self.enabled or not self._client:
+            return False
+
+        if not local_file.exists():
+            logger.error(f"Local file does not exist: {local_file}")
+            return False
+
+        file_size_mb = local_file.stat().st_size / (1024 * 1024)
+        logger.info(f"Uploading {local_file.name} ({file_size_mb:.1f} MB) → r2://{self.bucket}/{key}")
+
+        try:
+            self._client.upload_file(
+                str(local_file),
+                self.bucket,
+                key,
+                Config=boto3.s3.transfer.TransferConfig(
+                    multipart_threshold=_MULTIPART_THRESHOLD,
+                    multipart_chunksize=_MULTIPART_CHUNKSIZE,
+                    max_concurrency=2,
+                ),
+                ExtraArgs={"ContentType": "video/mp4"},
+            )
+            logger.info(f"Upload complete: {local_file.name} → {key}")
+            return True
+        except Exception as e:
+            logger.error(f"Upload failed for {local_file.name}: {e}")
+            return False
+
+    def upload_match_archives(self, match_id: str, match_dir: Path) -> Dict:
+        """Upload all archive files for a match to R2."""
+        if not self.enabled:
+            return {
+                "success": False,
+                "message": "R2 upload disabled (no credentials)",
+                "uploaded": [],
+                "failed": [],
+            }
+
+        archive_files = list(match_dir.glob("cam*_archive.mp4"))
+        if not archive_files:
+            logger.warning(f"No archive files found for {match_id}")
+            return {
+                "success": False,
+                "message": "No archive files to upload",
+                "uploaded": [],
+                "failed": [],
+            }
+
+        logger.info(f"Found {len(archive_files)} archive files to upload for {match_id}")
+
+        uploaded = []
+        failed = []
+
+        for archive_file in archive_files:
+            key = self._build_key(match_id, archive_file.name)
+            if self.upload_file(archive_file, key):
+                uploaded.append(archive_file.name)
+            else:
+                failed.append(archive_file.name)
+
+        remote_prefix = self._build_key(match_id, "")
+        return {
+            "success": len(failed) == 0,
+            "message": f"Uploaded {len(uploaded)}/{len(archive_files)} files",
+            "uploaded": uploaded,
+            "failed": failed,
+            "remote_folder": f"r2://{self.bucket}/{remote_prefix}",
+        }
+
+
+_r2_upload_service: Optional[R2UploadService] = None
+
+
+def get_r2_upload_service() -> R2UploadService:
+    global _r2_upload_service
+    if _r2_upload_service is None:
+        _r2_upload_service = R2UploadService()
+    return _r2_upload_service

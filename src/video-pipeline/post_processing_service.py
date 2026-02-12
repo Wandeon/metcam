@@ -207,25 +207,25 @@ class PostProcessingService:
             if success:
                 logger.info(f"Post-processing complete for {match_id} ({duration:.1f}s)")
 
-                # Upload to Nextcloud after successful processing
+                # Upload to R2 after successful processing
                 upload_result = {'success': False, 'message': 'Upload not attempted'}
                 try:
-                    from nextcloud_upload_service import get_nextcloud_upload_service
-                    nextcloud_service = get_nextcloud_upload_service()
-                    if nextcloud_service.enabled:
-                        logger.info(f"Starting Nextcloud upload for {match_id}")
-                        upload_result = nextcloud_service.upload_match_archives(
+                    from r2_upload_service import get_r2_upload_service
+                    r2_service = get_r2_upload_service()
+                    if r2_service.enabled:
+                        logger.info(f"Starting R2 upload for {match_id}")
+                        upload_result = r2_service.upload_match_archives(
                             match_id,
                             self.base_recordings_dir / match_id
                         )
                         if upload_result['success']:
-                            logger.info(f"Nextcloud upload complete: {upload_result['message']}")
+                            logger.info(f"R2 upload complete: {upload_result['message']}")
                         else:
-                            logger.error(f"Nextcloud upload failed: {upload_result['message']}")
+                            logger.error(f"R2 upload failed: {upload_result['message']}")
                     else:
-                        logger.info("Nextcloud upload skipped (not configured)")
+                        logger.info("R2 upload skipped (not configured)")
                 except Exception as e:
-                    logger.error(f"Nextcloud upload error for {match_id}: {e}")
+                    logger.error(f"R2 upload error for {match_id}: {e}")
                     upload_result = {'success': False, 'message': str(e)}
 
                 return {
