@@ -39,6 +39,7 @@ class RecordingService:
         self.max_recovery_attempts = 2
         self.recovery_backoff_seconds = 1.0
         self.stop_eos_timeout_seconds = 5.0
+        self.integrity_probe_timeout_seconds = 8.0
 
         # Recording state
         self.current_match_id: Optional[str] = None
@@ -78,6 +79,10 @@ class RecordingService:
             self.max_recovery_attempts = max(0, int(config.get('recording_recovery_max_attempts', 2)))
             self.recovery_backoff_seconds = max(0.0, float(config.get('recording_recovery_backoff_seconds', 1.0)))
             self.stop_eos_timeout_seconds = max(1.0, float(config.get('recording_stop_eos_timeout_seconds', 5.0)))
+            self.integrity_probe_timeout_seconds = max(
+                1.0,
+                float(config.get('recording_integrity_probe_timeout_seconds', 8.0)),
+            )
         except Exception as e:
             logger.warning(
                 "Failed to load recording policy from config: %s. Using defaults.",
@@ -87,6 +92,7 @@ class RecordingService:
             self.max_recovery_attempts = 2
             self.recovery_backoff_seconds = 1.0
             self.stop_eos_timeout_seconds = 5.0
+            self.integrity_probe_timeout_seconds = 8.0
 
     def _init_recovery_state(self):
         """Reset per-camera recovery state for the current recording session."""
@@ -170,12 +176,11 @@ class RecordingService:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name,avg_frame_rate,nb_read_frames",
+            "stream=codec_name,avg_frame_rate",
             "-show_entries",
             "format=duration,size,bit_rate",
             "-of",
             "json",
-            "-count_frames",
             str(path),
         ]
         try:
@@ -183,7 +188,7 @@ class RecordingService:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=3.0,
+                timeout=self.integrity_probe_timeout_seconds,
                 check=False,
             )
         except Exception as e:
@@ -242,7 +247,6 @@ class RecordingService:
                 "duration": format_info.get("duration"),
                 "bit_rate": format_info.get("bit_rate"),
                 "avg_frame_rate": streams[0].get("avg_frame_rate"),
-                "nb_read_frames": streams[0].get("nb_read_frames"),
             }
 
         self.health_probe_cache[path_key] = {

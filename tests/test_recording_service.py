@@ -8,6 +8,7 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 
 class FakePipelineState:
@@ -212,6 +213,41 @@ class TestRecordingService(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("Failed to start all required cameras", result["message"])
         self.assertEqual(self.service.current_match_id, None)
+
+    def test_load_recording_policy_reads_integrity_probe_timeout(self) -> None:
+        self.module.load_camera_config = lambda config_path=None: {  # type: ignore[assignment]
+            "recording_quality": "high",
+            "recording_integrity_probe_timeout_seconds": 11.25,
+        }
+
+        self.service._load_recording_policy()
+
+        self.assertEqual(self.service.integrity_probe_timeout_seconds, 11.25)
+
+    def test_probe_segment_integrity_uses_metadata_probe_and_configured_timeout(self) -> None:
+        segment = Path(self.temp_dir.name) / "probe_target.mp4"
+        segment.write_bytes(b"probe-bytes")
+        self.service.integrity_probe_timeout_seconds = 7.5
+
+        probe_stdout = json.dumps(
+            {
+                "streams": [{"codec_name": "h264", "avg_frame_rate": "30/1"}],
+                "format": {"duration": "12.3", "size": "999", "bit_rate": "1000"},
+            }
+        )
+        completed = types.SimpleNamespace(returncode=0, stdout=probe_stdout, stderr="")
+
+        with mock.patch.object(self.module.shutil, "which", return_value="/usr/bin/ffprobe"), mock.patch.object(
+            self.module.subprocess, "run", return_value=completed
+        ) as run_mock:
+            result = self.service._probe_segment_integrity(segment, time.time())
+
+        called_cmd = run_mock.call_args.args[0]
+        self.assertNotIn("-count_frames", called_cmd)
+        self.assertEqual(run_mock.call_args.kwargs["timeout"], 7.5)
+        self.assertTrue(result["checked"])
+        self.assertTrue(result["ok"])
+        self.assertNotIn("nb_read_frames", result)
 
     def test_stop_recording_protection_and_force(self) -> None:
         start = self.service.start_recording("match_protected", process_after_recording=False)

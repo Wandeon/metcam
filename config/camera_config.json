@@ -11,6 +11,8 @@
   "_recording_recovery_backoff_seconds_comment": "Base seconds for linear backoff between camera recovery attempts.",
   "recording_stop_eos_timeout_seconds": 8.0,
   "_recording_stop_eos_timeout_seconds_comment": "Seconds to wait for EOS when stopping recording before forcing NULL state.",
+  "recording_integrity_probe_timeout_seconds": 8.0,
+  "_recording_integrity_probe_timeout_seconds_comment": "Timeout for ffprobe metadata validation used by stop/integrity checks. Metadata-only probe avoids full frame counting overhead.",
   "cameras": {
     "0": {
       "rotation": 0.0,
