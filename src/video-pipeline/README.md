@@ -79,6 +79,18 @@ bottom = Y coordinate where cropped region ENDS (pixels from top edge)
 }
 ```
 
+### Recording Policy Keys
+
+Top-level recording policy keys in `config/camera_config.json`:
+
+- `recording_require_all_cameras` - strict dual-camera start behavior.
+- `recording_recovery_max_attempts` - per-camera automatic recovery cap.
+- `recording_recovery_backoff_seconds` - linear recovery backoff base.
+- `recording_stop_eos_timeout_seconds` - EOS wait time before forced stop.
+- `recording_integrity_probe_timeout_seconds` - ffprobe timeout used for post-stop segment integrity checks.
+
+Integrity checks intentionally use metadata-level ffprobe (not full frame counting) to avoid stop-path false failures on large segments.
+
 ### Coordinate Conversion Formula
 
 For a **3840×2160 sensor** with config `{left: 480, right: 480, top: 272, bottom: 272}`:

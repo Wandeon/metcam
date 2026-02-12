@@ -128,6 +128,7 @@ Notes:
 - `success=true` means all camera outputs finalized cleanly.
 - `transport_success=true` means stop commands reached/closed pipelines, even if finalization was incomplete.
 - `integrity` includes post-stop segment probe outcomes per camera.
+- Integrity probing uses ffprobe metadata checks (constant-time vs segment length). Probe timeout is controlled by `recording_integrity_probe_timeout_seconds`.
 - If finalization succeeds but integrity fails, response returns `success=false` with
   message `Recording pipelines stopped but integrity checks failed`.
 
