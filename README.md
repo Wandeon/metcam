@@ -152,6 +152,7 @@ This prevents the CPU from being overwhelmed by running 4 pipelines simultaneous
 
 ### Deployment & Setup
 - **[Deployment Guide](deploy/README.md)** - Complete installation guide
+- **`deploy/deploy-safe.sh`** - Deterministic update script with rollback + smoke checks
 - **[Post-Installation Checklist](deploy/CHECKLIST.md)** - Verification steps
 - **[Hardware Setup](docs/HARDWARE_SETUP.md)** - Camera and Jetson configuration
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions

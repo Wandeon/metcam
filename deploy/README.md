@@ -5,6 +5,7 @@ Complete deployment guide for installing FootballVision Pro v3 on NVIDIA Jetson 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Safe Updates](#safe-updates)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Validation](#validation)
@@ -32,6 +33,33 @@ chmod +x deploy/install-complete.sh
 # 2. Restart camera daemon: sudo systemctl restart nvargus-daemon
 # 3. Access UI at http://<your-jetson-ip>
 ```
+
+---
+
+## Safe Updates
+
+For repeatable production updates on an already installed device, use:
+
+```bash
+cd /home/mislav/footballvision-pro
+./deploy/deploy-safe.sh
+```
+
+What `deploy-safe.sh` does:
+
+1. Preserves local `config/camera_config.json`
+2. Fast-forwards `main` from `origin`
+3. Re-deploys systemd + Caddy configs
+4. Restarts API and verifies `/api/v1/health`
+5. Runs recording smoke test (start/wait/stop + integrity/transport checks)
+6. Rolls back to pre-deploy commit automatically on failure
+
+Useful flags:
+
+- `--no-smoke` (skip recording smoke)
+- `--smoke-duration <seconds>`
+- `--skip-caddy`
+- `--skip-systemd`
 
 ---
 
