@@ -176,8 +176,18 @@ class WebRtcService {
       throw new Error('WebSocket not connected');
     }
 
+    const normalized = normalizeIceServers(iceServers) ?? [{ urls: ['stun:stun.l.google.com:19302'] }];
+    // Force relay-only when TURN servers are configured.  The Jetson sits
+    // behind restrictive NAT — ICE connectivity checks pass over the direct
+    // path (srflx) but DTLS/SRTP cannot traverse it.  Using relay-only
+    // ensures all media flows through the TURN server on VPS-02.
+    const hasTurn = normalized.some((s) => {
+      const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+      return urls.some((u) => typeof u === 'string' && /^turns?:/i.test(u));
+    });
     const peer = new RTCPeerConnection({
-      iceServers: normalizeIceServers(iceServers) ?? [{ urls: ['stun:stun.l.google.com:19302'] }],
+      iceServers: normalized,
+      iceTransportPolicy: hasTurn ? 'relay' : 'all',
     });
 
     const state: ActivePeer = {
