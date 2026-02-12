@@ -370,6 +370,13 @@ class PanoramaService:
                 if not created:
                     raise Exception("Failed to create output pipeline")
 
+                # GStreamer 1.20 bug: turn-server property validates but doesn't
+                # register with the ICE agent.  Use add-turn-server signal.
+                if resolved_transport == "webrtc" and self.turn_server:
+                    webrtcbin = self._get_webrtcbin()
+                    if webrtcbin:
+                        webrtcbin.emit("add-turn-server", self.turn_server)
+
                 if not self.gst_manager.start_pipeline('panorama_output'):
                     raise Exception("Failed to start output pipeline")
 

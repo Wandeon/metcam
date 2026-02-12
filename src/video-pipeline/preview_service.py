@@ -279,6 +279,16 @@ class PreviewService:
                         failed_cameras.append(cam_id)
                         continue
 
+                    # GStreamer 1.20's webrtcbin `turn-server` property validates
+                    # the URL but doesn't register it with the ICE agent for relay
+                    # allocation.  The `add-turn-server` action signal is the
+                    # correct API and actually adds it to the relay list.
+                    if resolved_transport == WEBRTC and self.turn_server:
+                        webrtcbin = self._get_webrtcbin(pipeline_name)
+                        if webrtcbin:
+                            added = webrtcbin.emit("add-turn-server", self.turn_server)
+                            logger.info("TURN server added to %s via signal: %s", pipeline_name, added)
+
                     if not self.gst_manager.start_pipeline(pipeline_name):
                         self.gst_manager.remove_pipeline(pipeline_name)
                         failed_cameras.append(cam_id)
