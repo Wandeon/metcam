@@ -17,6 +17,18 @@ from threading import Lock
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
+import threading
+
+# GstRtspServer is optional -- only needed when relay mode is active.
+try:
+    import gi as _gi
+    _gi.require_version("GstRtspServer", "1.0")
+    from gi.repository import GstRtspServer as _GstRtspServer
+    from gi.repository import GLib as _GLib
+    _HAS_RTSP_SERVER = True
+except (ImportError, ValueError):
+    _HAS_RTSP_SERVER = False
+
 from gstreamer_manager import GStreamerManager, PipelineState
 import pipeline_builders
 from exposure_sync_service import get_exposure_sync_service
@@ -70,6 +82,20 @@ class PreviewService:
         self.stun_server = os.getenv("WEBRTC_STUN_SERVER", "stun://stun.l.google.com:19302").strip()
         self.turn_server = os.getenv("WEBRTC_TURN_SERVER", "").strip() or None
 
+        # RTSP relay settings (for go2rtc on VPS-02)
+        self.relay_url = os.getenv("WEBRTC_RELAY_URL", "").strip() or None
+        self.rtsp_bind_address = os.getenv("RTSP_BIND_ADDRESS", "100.78.19.7").strip()
+        self.rtsp_port = int(os.getenv("RTSP_PORT", "8554"))
+
+        # GstRtspServer singleton + GLib loop thread (lazy-init)
+        self._rtsp_server = None
+        self._rtsp_mounts = None
+        self._rtsp_loop = None
+        self._rtsp_loop_thread = None
+
+        # Explicit RTSP mount state (GStreamerManager doesn't track these)
+        self.rtsp_mount_active: dict[int, bool] = {cam_id: False for cam_id in self.camera_ids}
+
     # ---------------------------------------------------------------------
     # Transport + status
     # ---------------------------------------------------------------------
@@ -78,6 +104,9 @@ class PreviewService:
         requested = (requested_transport or "").strip().lower()
         if requested in {HLS, WEBRTC}:
             return requested
+        # When a relay URL is configured, default to WebRTC (served via go2rtc).
+        if self.relay_url:
+            return WEBRTC
         if self.preview_transport_mode == WEBRTC:
             return WEBRTC
         # In dual mode default to HLS unless caller explicitly asks for WebRTC.
@@ -145,6 +174,68 @@ class PreviewService:
                 servers.append(server)
         return servers
 
+    # ---------------------------------------------------------------------
+    # RTSP relay (GstRtspServer)
+    # ---------------------------------------------------------------------
+
+    def _ensure_rtsp_server(self) -> None:
+        """Start the GstRtspServer singleton with a GLib main loop thread."""
+        if self._rtsp_server is not None:
+            return
+        if not _HAS_RTSP_SERVER:
+            raise RuntimeError(
+                "GstRtspServer not installed (apt install gir1.2-gst-rtsp-server-1.0)"
+            )
+
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+        Gst.init(None)
+
+        self._rtsp_server = _GstRtspServer.RTSPServer()
+        self._rtsp_server.set_address(self.rtsp_bind_address)
+        self._rtsp_server.set_service(str(self.rtsp_port))
+        self._rtsp_mounts = self._rtsp_server.get_mount_points()
+        self._rtsp_server.attach(None)
+
+        # GstRtspServer needs a running GLib MainLoop to accept clients.
+        self._rtsp_loop = _GLib.MainLoop()
+        self._rtsp_loop_thread = threading.Thread(
+            target=self._rtsp_loop.run, daemon=True, name="rtsp-glib-loop"
+        )
+        self._rtsp_loop_thread.start()
+        logger.info(
+            "RTSP server started on %s:%d (GLib loop thread active)",
+            self.rtsp_bind_address, self.rtsp_port,
+        )
+
+    def _add_rtsp_mount(self, cam_id: int) -> None:
+        """Add an RTSP mount point for a camera. Pipeline starts on client connect."""
+        self._ensure_rtsp_server()
+        mount_path = f"/cam{cam_id}"
+
+        factory = _GstRtspServer.RTSPMediaFactory()
+        launch_str = pipeline_builders.build_preview_rtsp_pipeline(cam_id)
+        factory.set_launch(launch_str)
+        factory.set_shared(True)
+        factory.set_latency(0)
+
+        self._rtsp_mounts.add_factory(mount_path, factory)
+        self.rtsp_mount_active[cam_id] = True
+        logger.info(
+            "RTSP mount added: rtsp://%s:%d%s",
+            self.rtsp_bind_address, self.rtsp_port, mount_path,
+        )
+
+    def _remove_rtsp_mount(self, cam_id: int) -> None:
+        """Remove an RTSP mount point for a camera."""
+        if self._rtsp_mounts is None:
+            return
+        mount_path = f"/cam{cam_id}"
+        self._rtsp_mounts.remove_factory(mount_path)
+        self.rtsp_mount_active[cam_id] = False
+        logger.info("RTSP mount removed: %s", mount_path)
+
     def get_status(self) -> Dict[str, Any]:
         """Get current preview status."""
         with self.state_lock:
@@ -154,7 +245,11 @@ class PreviewService:
                 pipeline_name = f"preview_cam{cam_id}"
                 info = self.gst_manager.get_pipeline_status(pipeline_name)
 
-                active = bool(info and info.state == PipelineState.RUNNING)
+                # In relay/RTSP mode, active = mount exists (no GStreamerManager pipeline).
+                if self.relay_url and self.rtsp_mount_active.get(cam_id, False):
+                    active = True
+                else:
+                    active = bool(info and info.state == PipelineState.RUNNING)
                 uptime = 0.0
                 if info and info.start_time:
                     uptime = (datetime.utcnow() - info.start_time).total_seconds()
@@ -187,6 +282,22 @@ class PreviewService:
                 if meta.get("active")
             ]
 
+            relay = None
+            if self.relay_url:
+                rtsp_urls = {}
+                mounts = {}
+                for cam_id in self.camera_ids:
+                    key = f"camera_{cam_id}"
+                    rtsp_urls[key] = f"rtsp://{self.rtsp_bind_address}:{self.rtsp_port}/cam{cam_id}"
+                    mounts[key] = self.rtsp_mount_active.get(cam_id, False)
+                relay = {
+                    "enabled": True,
+                    "ws_url": self.relay_url,
+                    "ingest": "rtsp",
+                    "rtsp_urls": rtsp_urls,
+                    "mounts": mounts,
+                }
+
             return {
                 "preview_active": any(cam["active"] for cam in cameras.values()),
                 "cameras": cameras,
@@ -194,6 +305,7 @@ class PreviewService:
                 "webrtc_supported": self._is_webrtc_supported(),
                 "ice_servers": self.get_ice_servers(),
                 "webrtc_streams": active_webrtc_streams,
+                "relay": relay,
             }
 
     # ---------------------------------------------------------------------
@@ -257,6 +369,16 @@ class PreviewService:
                     self.webrtc_callbacks_registered.discard(pipeline_name)
 
                 try:
+                    # Relay mode: use RTSP ingest instead of webrtcbin.
+                    # UI-facing transport stays "webrtc".
+                    if resolved_transport == WEBRTC and self.relay_url:
+                        self._add_rtsp_mount(cam_id)
+                        self.preview_active[cam_id] = True
+                        self.preview_transport[cam_id] = WEBRTC  # UI sees "webrtc"
+                        started_cameras.append(cam_id)
+                        logger.info("Preview camera %s started (rtsp ingest for relay)", cam_id)
+                        continue
+
                     pipeline_str = self._build_pipeline(cam_id, resolved_transport)
 
                     def on_eos(name, metadata):
@@ -353,6 +475,14 @@ class PreviewService:
 
                 pipeline_name = f"preview_cam{cam_id}"
                 try:
+                    # Relay mode: remove RTSP mount instead of stopping GStreamer pipeline.
+                    if self.rtsp_mount_active.get(cam_id, False):
+                        self._remove_rtsp_mount(cam_id)
+                        self._clear_camera_sessions(cam_id)
+                        self.preview_active[cam_id] = False
+                        stopped_cameras.append(cam_id)
+                        continue
+
                     stopped = self.gst_manager.stop_pipeline(
                         pipeline_name,
                         wait_for_eos=False,

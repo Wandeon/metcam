@@ -89,6 +89,7 @@ def _load_preview_service_module():
 
     pb_stub = types.ModuleType("pipeline_builders")
     pb_stub.build_preview_pipeline = lambda camera_id, hls_location: f"pipeline-cam{camera_id}-{hls_location}"
+    pb_stub.build_preview_rtsp_pipeline = lambda camera_id, config_path=None: f"( rtsp-pipeline-cam{camera_id} name=pay0 )"
     sys.modules["pipeline_builders"] = pb_stub
 
     exposure_stub = types.ModuleType("exposure_sync_service")
@@ -117,9 +118,11 @@ class TestPreviewService(unittest.TestCase):
         self.prev_transport_mode = os.environ.get("PREVIEW_TRANSPORT_MODE")
         self.prev_stun_server = os.environ.get("WEBRTC_STUN_SERVER")
         self.prev_turn_server = os.environ.get("WEBRTC_TURN_SERVER")
+        self.prev_relay_url = os.environ.get("WEBRTC_RELAY_URL")
         os.environ["PREVIEW_TRANSPORT_MODE"] = "hls"
         os.environ["WEBRTC_STUN_SERVER"] = "stun://stun.l.google.com:19302"
         os.environ.pop("WEBRTC_TURN_SERVER", None)
+        os.environ.pop("WEBRTC_RELAY_URL", None)
         self.module, self.exposure_stub = _load_preview_service_module()
         self.tmp = tempfile.TemporaryDirectory()
         self.hls_dir = Path(self.tmp.name) / "hls"
@@ -139,6 +142,10 @@ class TestPreviewService(unittest.TestCase):
             os.environ.pop("WEBRTC_TURN_SERVER", None)
         else:
             os.environ["WEBRTC_TURN_SERVER"] = self.prev_turn_server
+        if self.prev_relay_url is None:
+            os.environ.pop("WEBRTC_RELAY_URL", None)
+        else:
+            os.environ["WEBRTC_RELAY_URL"] = self.prev_relay_url
         self.tmp.cleanup()
 
     def test_start_preview_recreates_hls_directory(self) -> None:
@@ -200,6 +207,59 @@ class TestPreviewService(unittest.TestCase):
                 },
             ],
         )
+
+
+    def test_relay_mode_status_includes_relay_block(self) -> None:
+        os.environ["WEBRTC_RELAY_URL"] = "wss://vid.nk-otok.hr/go2rtc"
+        service = self.module.PreviewService(hls_base_dir=str(self.hls_dir))
+        service.gst_manager = _FakeGStreamerManager()
+
+        status = service.get_status()
+
+        self.assertIn("relay", status)
+        self.assertTrue(status["relay"]["enabled"])
+        self.assertEqual(status["relay"]["ws_url"], "wss://vid.nk-otok.hr/go2rtc")
+        self.assertEqual(status["relay"]["ingest"], "rtsp")
+
+    def test_relay_mode_resolves_webrtc_transport_to_internal_rtsp(self) -> None:
+        os.environ["WEBRTC_RELAY_URL"] = "wss://vid.nk-otok.hr/go2rtc"
+        service = self.module.PreviewService(hls_base_dir=str(self.hls_dir))
+        service.gst_manager = _FakeGStreamerManager()
+
+        # Relay mode: requested "webrtc" should resolve to "webrtc" (UI-facing)
+        resolved = service._resolve_transport("webrtc")
+        self.assertEqual(resolved, "webrtc")
+
+    def test_relay_mode_default_transport_is_webrtc(self) -> None:
+        os.environ["WEBRTC_RELAY_URL"] = "wss://vid.nk-otok.hr/go2rtc"
+        service = self.module.PreviewService(hls_base_dir=str(self.hls_dir))
+        service.gst_manager = _FakeGStreamerManager()
+
+        # Default transport when relay is configured should be "webrtc"
+        resolved = service._resolve_transport(None)
+        self.assertEqual(resolved, "webrtc")
+
+    def test_no_relay_mode_status_has_no_relay_block(self) -> None:
+        os.environ.pop("WEBRTC_RELAY_URL", None)
+        service = self.module.PreviewService(hls_base_dir=str(self.hls_dir))
+        service.gst_manager = _FakeGStreamerManager()
+
+        status = service.get_status()
+        self.assertIsNone(status.get("relay"))
+
+    def test_relay_mode_cameras_report_webrtc_transport(self) -> None:
+        """UI-facing transport must stay 'webrtc', never 'rtsp'."""
+        os.environ["WEBRTC_RELAY_URL"] = "wss://vid.nk-otok.hr/go2rtc"
+        service = self.module.PreviewService(hls_base_dir=str(self.hls_dir))
+        service.gst_manager = _FakeGStreamerManager()
+        # Simulate RTSP mount active
+        service.preview_active[0] = True
+        service.preview_transport[0] = "webrtc"
+        service.rtsp_mount_active[0] = True
+
+        status = service.get_status()
+        self.assertEqual(status["cameras"]["camera_0"]["transport"], "webrtc")
+        self.assertTrue(status["cameras"]["camera_0"]["active"])
 
 
 if __name__ == "__main__":
