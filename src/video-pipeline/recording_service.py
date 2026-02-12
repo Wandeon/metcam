@@ -45,6 +45,7 @@ class RecordingService:
         self.overload_guard_poll_interval_seconds = 5.0
         self.overload_guard_unhealthy_streak_threshold = 3
         self.overload_guard_unhealthy_streak = 0
+        self.slo_min_effective_fps = 24.0
 
         # Recording state
         self.current_match_id: Optional[str] = None
@@ -63,6 +64,7 @@ class RecordingService:
         self.overload_guard_state: Dict[str, Any] = {}
         self._overload_monitor_stop_event = Event()
         self._overload_monitor_thread: Optional[Thread] = None
+        self.alert_log_path = Path("/var/log/footballvision/system/alerts.log")
         
         # Recording protection
         self.protection_seconds = 10.0  # Don't allow stop within first 10s
@@ -104,6 +106,10 @@ class RecordingService:
                 1,
                 int(config.get('recording_overload_unhealthy_streak_threshold', 3)),
             )
+            self.slo_min_effective_fps = max(
+                1.0,
+                float(config.get('recording_slo_min_effective_fps', 24.0)),
+            )
         except Exception as e:
             logger.warning(
                 "Failed to load recording policy from config: %s. Using defaults.",
@@ -118,6 +124,7 @@ class RecordingService:
             self.overload_guard_cpu_percent_threshold = 92.0
             self.overload_guard_poll_interval_seconds = 5.0
             self.overload_guard_unhealthy_streak_threshold = 3
+            self.slo_min_effective_fps = 24.0
         self.overload_guard_unhealthy_streak = 0
 
     def _init_recovery_state(self):
@@ -156,6 +163,99 @@ class RecordingService:
             return float(psutil.cpu_percent(interval=None))
         except Exception:
             return None
+
+    @staticmethod
+    def _parse_avg_frame_rate(raw: Any) -> Optional[float]:
+        if raw in (None, "", "N/A", "0/0"):
+            return None
+        raw_str = str(raw)
+        if "/" in raw_str:
+            num, den = raw_str.split("/", 1)
+            try:
+                num_f = float(num)
+                den_f = float(den)
+                if den_f == 0:
+                    return None
+                return num_f / den_f
+            except ValueError:
+                return None
+        try:
+            return float(raw_str)
+        except ValueError:
+            return None
+
+    def _emit_operator_alert(
+        self,
+        event_type: str,
+        severity: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "event_type": event_type,
+            "severity": severity,
+            "message": message,
+            "details": details or {},
+        }
+        if severity == "error":
+            logger.error("ALERT %s: %s | %s", event_type, message, payload["details"])
+        else:
+            logger.warning("ALERT %s: %s | %s", event_type, message, payload["details"])
+        try:
+            self.alert_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.alert_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, sort_keys=True) + "\n")
+        except Exception as e:
+            logger.warning("Failed to append operator alert to %s: %s", self.alert_log_path, e)
+
+    def _emit_stop_slo_alerts(
+        self,
+        message: str,
+        transport_success: bool,
+        graceful_stop: bool,
+        integrity_gate_failed: bool,
+        camera_stop_results: Dict[str, Dict[str, Any]],
+    ) -> None:
+        if not transport_success:
+            self._emit_operator_alert(
+                "recording_stop_transport_failure",
+                "error",
+                "Recording stop transport failed",
+                {"message": message, "camera_stop_results": camera_stop_results},
+            )
+        if not graceful_stop:
+            self._emit_operator_alert(
+                "recording_stop_non_graceful",
+                "warning",
+                "Recording stop completed without full EOS finalization",
+                {"message": message, "camera_stop_results": camera_stop_results},
+            )
+        if integrity_gate_failed:
+            self._emit_operator_alert(
+                "recording_integrity_failed",
+                "error",
+                "Recording integrity gate failed after stop",
+                {"message": message, "camera_stop_results": camera_stop_results},
+            )
+
+        low_fps: Dict[str, float] = {}
+        for camera_key, details in camera_stop_results.items():
+            fps = self._parse_avg_frame_rate(details.get("integrity_avg_frame_rate"))
+            if fps is None:
+                continue
+            if fps < self.slo_min_effective_fps:
+                low_fps[camera_key] = round(fps, 3)
+        if low_fps:
+            self._emit_operator_alert(
+                "recording_fps_below_slo",
+                "warning",
+                "Recording effective FPS below SLO threshold",
+                {
+                    "min_effective_fps": self.slo_min_effective_fps,
+                    "camera_fps": low_fps,
+                },
+            )
 
     def _ingest_overload_sample(self, cpu_percent: Optional[float], health: Dict[str, Any], now: float) -> Dict[str, Any]:
         """
@@ -207,6 +307,16 @@ class RecordingService:
                 self.overload_guard_unhealthy_streak,
                 self.overload_guard_unhealthy_streak_threshold,
                 reasons,
+            )
+            self._emit_operator_alert(
+                "recording_overload_guard_triggered",
+                "warning",
+                "Recording overload guard activated",
+                {
+                    "unhealthy_streak": self.overload_guard_unhealthy_streak,
+                    "threshold": self.overload_guard_unhealthy_streak_threshold,
+                    "reasons": reasons,
+                },
             )
         elif was_active and not active_now:
             logger.info("Recording overload guard cleared after healthy sample")
@@ -957,10 +1067,14 @@ class RecordingService:
             if camera_key not in camera_stop_results:
                 continue
             details = camera_stop_results[camera_key]
+            probe_meta = camera_integrity.get("probe") if isinstance(camera_integrity, dict) else {}
+            if not isinstance(probe_meta, dict):
+                probe_meta = {}
             details["segment_path"] = camera_integrity.get("segment_path")
             details["integrity_checked"] = camera_integrity.get("integrity_checked")
             details["integrity_ok"] = camera_integrity.get("integrity_ok")
             details["integrity_error"] = camera_integrity.get("integrity_error")
+            details["integrity_avg_frame_rate"] = probe_meta.get("avg_frame_rate")
 
         # Clear state
         self.current_match_id = None
@@ -1002,6 +1116,14 @@ class RecordingService:
             message = "Recording pipelines stopped but media finalization was incomplete"
         else:
             message = "Recording stop completed with camera errors"
+
+        self._emit_stop_slo_alerts(
+            message=message,
+            transport_success=transport_success,
+            graceful_stop=graceful_stop,
+            integrity_gate_failed=integrity_gate_failed,
+            camera_stop_results=camera_stop_results,
+        )
 
         return {
             "success": success,

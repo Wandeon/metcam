@@ -92,6 +92,7 @@ Top-level recording policy keys in `config/camera_config.json`:
 - `recording_overload_cpu_percent_threshold` - CPU threshold considered overloaded.
 - `recording_overload_poll_interval_seconds` - monitor sampling interval.
 - `recording_overload_unhealthy_streak_threshold` - sustained unhealthy samples required before guard triggers.
+- `recording_slo_min_effective_fps` - minimum per-camera effective fps; post-stop alert hooks emit warnings when lower.
 
 Integrity checks intentionally use metadata-level ffprobe (not full frame counting) to avoid stop-path false failures on large segments.
 

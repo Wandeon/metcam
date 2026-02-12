@@ -132,6 +132,7 @@ class TestRecordingService(unittest.TestCase):
         self.service.gst_manager = FakeGStreamerManager()
         self.service.overload_guard_enabled = False
         self.service.state_file = Path(self.temp_dir.name) / "recording_state.json"
+        self.service.alert_log_path = Path(self.temp_dir.name) / "alerts.log"
         self.service._clear_state()
 
     def tearDown(self) -> None:
@@ -144,6 +145,16 @@ class TestRecordingService(unittest.TestCase):
     def _mark_recording_pipelines_running(self) -> None:
         for cam_id in self.service.camera_ids:
             self.service.gst_manager.statuses[f"recording_cam{cam_id}"] = FakePipelineStatus(state="running")
+
+    def _read_alert_events(self) -> list[dict]:
+        if not self.service.alert_log_path.exists():
+            return []
+        lines = [
+            line.strip()
+            for line in self.service.alert_log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return [json.loads(line) for line in lines]
 
     def test_start_recording_partial_camera_rolls_back_when_strict_mode_enabled(self) -> None:
         self.service.gst_manager.create_results["recording_cam1"] = False
@@ -312,6 +323,20 @@ class TestRecordingService(unittest.TestCase):
         self.assertEqual(cleared["unhealthy_streak"], 0)
         self.assertNotIn("overload_guard", self.service.degraded_cameras)
 
+    def test_overload_guard_trigger_writes_alert_event(self) -> None:
+        self.service.overload_guard_unhealthy_streak_threshold = 1
+        self.service.overload_guard_cpu_percent_threshold = 50.0
+
+        self.service._ingest_overload_sample(
+            70.0,
+            {"healthy": True, "message": "Recording healthy"},
+            now=time.time(),
+        )
+
+        events = self._read_alert_events()
+        self.assertTrue(events)
+        self.assertEqual(events[-1]["event_type"], "recording_overload_guard_triggered")
+
     def test_status_includes_overload_guard_state(self) -> None:
         idle_status = self.service.get_status()
         self.assertIn("overload_guard", idle_status)
@@ -362,6 +387,8 @@ class TestRecordingService(unittest.TestCase):
         self.assertIn("finalization was incomplete", stop["message"])
         self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam0"][-1], 9.5)
         self.assertEqual(self.service.gst_manager.stop_timeouts["recording_cam1"][-1], 9.5)
+        event_types = [event.get("event_type") for event in self._read_alert_events()]
+        self.assertIn("recording_stop_non_graceful", event_types)
 
     def test_stop_recording_integrity_gate_marks_failure_on_probe_error(self) -> None:
         match_id = "match_integrity_fail"
@@ -389,6 +416,8 @@ class TestRecordingService(unittest.TestCase):
         self.assertFalse(stop["integrity"]["all_ok"])
         self.assertFalse(stop["camera_stop_results"]["camera_0"]["integrity_ok"])
         self.assertEqual(stop["camera_stop_results"]["camera_0"]["integrity_error"], "moov atom not found")
+        event_types = [event.get("event_type") for event in self._read_alert_events()]
+        self.assertIn("recording_integrity_failed", event_types)
 
     def test_stop_recording_integrity_gate_passes_when_all_probes_ok(self) -> None:
         match_id = "match_integrity_ok"
@@ -414,6 +443,31 @@ class TestRecordingService(unittest.TestCase):
         self.assertTrue(stop["integrity"]["all_ok"])
         self.assertTrue(stop["camera_stop_results"]["camera_0"]["integrity_ok"])
         self.assertTrue(stop["camera_stop_results"]["camera_1"]["integrity_ok"])
+
+    def test_stop_recording_emits_low_fps_slo_alert(self) -> None:
+        match_id = "match_low_fps_alert"
+        start = self.service.start_recording(match_id, process_after_recording=False)
+        self.assertTrue(start["success"])
+        self.service.recording_start_time = time.time() - 20
+        self.service.slo_min_effective_fps = 24.0
+
+        segments_dir = Path(self.temp_dir.name) / match_id / "segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "cam0_20260212_000000_00.mp4").write_bytes(b"cam0")
+        (segments_dir / "cam1_20260212_000000_00.mp4").write_bytes(b"cam1")
+
+        self.service._probe_segment_integrity = lambda path, now: {  # type: ignore[method-assign]
+            "checked": True,
+            "ok": True,
+            "error": None,
+            "cached": False,
+            "avg_frame_rate": "10/1",
+        }
+
+        stop = self.service.stop_recording(force=False)
+        self.assertTrue(stop["success"])
+        event_types = [event.get("event_type") for event in self._read_alert_events()]
+        self.assertIn("recording_fps_below_slo", event_types)
 
     def test_stop_recording_triggers_post_processing_when_enabled(self) -> None:
         calls: list[str] = []

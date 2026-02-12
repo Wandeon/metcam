@@ -288,6 +288,13 @@ Supported `log_type` values:
 - `alerts`
 - `watchdog`
 
+`alerts` includes structured JSON-line operator events such as:
+- `recording_overload_guard_triggered`
+- `recording_stop_non_graceful`
+- `recording_stop_transport_failure`
+- `recording_integrity_failed`
+- `recording_fps_below_slo`
+
 #### `GET /api/v1/diagnostics/recording-correlations`
 Correlates recent `NvVIC` allocator/open errors with recording timeout and media-probe-failure signals.
 

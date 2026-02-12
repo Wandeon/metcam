@@ -144,6 +144,13 @@ class TestSystemContracts(unittest.TestCase):
         self.assertIn("if frame_count == total_frames", source)
         self.assertIn("timeout = 10 * Gst.SECOND", source)
 
+    def test_recording_alert_hook_event_types_exist(self) -> None:
+        source = (ROOT / "src/video-pipeline/recording_service.py").read_text(encoding="utf-8")
+        self.assertIn("recording_overload_guard_triggered", source)
+        self.assertIn("recording_stop_non_graceful", source)
+        self.assertIn("recording_integrity_failed", source)
+        self.assertIn("recording_fps_below_slo", source)
+
 
 if __name__ == "__main__":
     unittest.main()
