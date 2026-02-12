@@ -32,6 +32,14 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
+  // Track WebRTC disconnect generation so the effect re-runs after WS recovery.
+  const [rtcGeneration, setRtcGeneration] = useState(webRtcService.disconnectGeneration);
+  useEffect(() => {
+    return webRtcService.onDisconnectGeneration(() => {
+      setRtcGeneration(webRtcService.disconnectGeneration);
+    });
+  }, []);
+
   useEffect(() => {
     if (transport !== 'webrtc') return;
 
@@ -47,9 +55,6 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
       return;
     }
 
-    // Avoid restarting WebRTC on every parent re-render. Dependencies are
-    // intentionally stable (see effect deps) and only change when transport
-    // switches, streamKind changes, or ICE config changes materially.
     webRtcService.startStream(streamKind, video, iceServers)
       .then(() => {
         setLoading(false);
@@ -66,6 +71,7 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
   }, [
     transport,
     streamKind,
+    rtcGeneration,
     // Parent pages receive frequent WS status refreshes. Use a stable key to
     // prevent WebRTC from constantly stopping/restarting due to new array refs.
     transport === 'webrtc' ? JSON.stringify(iceServers || []) : '',
