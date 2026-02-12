@@ -1008,14 +1008,23 @@ class PanoramaService:
                 }
 
             # Calculate homography
-            result = self.calibration_service.calculate_homography()
+            success, homography, metadata = self.calibration_service.calculate_homography()
 
-            if result.get('success'):
-                # Reload stitcher with new calibration
+            if success:
+                # Force stitcher reload with new calibration
                 self.stitcher = None
                 logger.info("Calibration complete, stitcher will reload on next use")
-
-            return result
+                return {
+                    'success': True,
+                    'message': 'Calibration completed successfully',
+                    **metadata
+                }
+            else:
+                return {
+                    'success': False,
+                    'message': metadata.get('error', 'Calibration failed'),
+                    **metadata
+                }
 
         except Exception as e:
             logger.error(f"Failed to complete calibration: {e}")
@@ -1334,12 +1343,12 @@ class PanoramaService:
 
                 # Stitch frames
                 stitch_start = time.time()
-                panorama = self.stitcher.stitch(frame0, frame1)
-                stitch_time = (time.time() - stitch_start) * 1000.0
-
-                if panorama is None:
-                    logger.warning("Stitching failed, skipping frame")
+                try:
+                    panorama, stitch_metadata = self.stitcher.stitch_frames(frame0, frame1)
+                except Exception as e:
+                    logger.warning(f"Stitching failed: {e}, skipping frame")
                     continue
+                stitch_time = (time.time() - stitch_start) * 1000.0
 
                 # Push to output
                 self._push_panorama_frame(panorama, timestamp_ns)
@@ -1564,8 +1573,9 @@ class PanoramaService:
                     break
 
                 # Stitch frames
-                panorama = self.stitcher.stitch(frame0, frame1)
-                if panorama is None:
+                try:
+                    panorama, _ = self.stitcher.stitch_frames(frame0, frame1)
+                except Exception:
                     logger.warning(f"Stitching failed for frame {frame_idx}")
                     continue
 
