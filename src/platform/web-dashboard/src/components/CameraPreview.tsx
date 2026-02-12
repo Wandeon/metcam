@@ -33,33 +33,52 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
+    if (transport !== 'webrtc') return;
+
     const video = videoRef.current;
     if (!video) return;
 
     setLoading(true);
     setError(null);
 
-    if (transport === 'webrtc') {
-      if (!streamKind) {
-        setError('Missing stream configuration');
-        setLoading(false);
-        return;
-      }
-
-      webRtcService.startStream(streamKind, video, iceServers)
-        .then(() => {
-          setLoading(false);
-        })
-        .catch((err) => {
-          console.error('WebRTC start failed:', err);
-          setError(err?.message || 'Failed to start WebRTC stream');
-          setLoading(false);
-        });
-
-      return () => {
-        webRtcService.stopStream(streamKind);
-      };
+    if (!streamKind) {
+      setError('Missing stream configuration');
+      setLoading(false);
+      return;
     }
+
+    // Avoid restarting WebRTC on every parent re-render. Dependencies are
+    // intentionally stable (see effect deps) and only change when transport
+    // switches, streamKind changes, or ICE config changes materially.
+    webRtcService.startStream(streamKind, video, iceServers)
+      .then(() => {
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error('WebRTC start failed:', err);
+        setError(err?.message || 'Failed to start WebRTC stream');
+        setLoading(false);
+      });
+
+    return () => {
+      webRtcService.stopStream(streamKind);
+    };
+  }, [
+    transport,
+    streamKind,
+    // Parent pages receive frequent WS status refreshes. Use a stable key to
+    // prevent WebRTC from constantly stopping/restarting due to new array refs.
+    transport === 'webrtc' ? JSON.stringify(iceServers || []) : '',
+  ]);
+
+  useEffect(() => {
+    if (transport === 'webrtc') return;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    setLoading(true);
+    setError(null);
 
     console.log('Loading HLS stream:', streamUrl);
 
@@ -129,7 +148,7 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({
         hlsRef.current = null;
       }
     };
-  }, [iceServers, streamKind, streamUrl, transport]);
+  }, [streamUrl, transport]);
 
   // Fullscreen handlers
   const enterFullscreen = () => {
