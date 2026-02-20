@@ -11,8 +11,9 @@ import { Panorama } from '@/pages/Panorama';
 import { Development } from '@/pages/Development';
 import { Logs } from '@/pages/Logs';
 import { Health } from '@/pages/Health';
+import { Player } from '@/pages/Player';
 import { Login } from '@/pages/Login';
-import { Video, Home, Film, Eye, Code, FileText, Activity, LogOut, Menu, X, RefreshCw, Layers } from 'lucide-react';
+import { Video, Home, Film, Eye, Code, FileText, Activity, LogOut, Menu, X, RefreshCw, Layers, Play } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { wsManager } from '@/services/websocket';
 import { webRtcService } from '@/services/webrtc';
@@ -136,6 +137,12 @@ function App() {
                 onClick={() => setSidebarOpen(false)}
               />
               <NavLink
+                to="/player"
+                icon={<Play className="w-5 h-5" />}
+                label="Player"
+                onClick={() => setSidebarOpen(false)}
+              />
+              <NavLink
                 to="/health"
                 icon={<Activity />}
                 label="Health"
@@ -208,6 +215,7 @@ function App() {
             <Route path="/preview" element={<Preview />} />
             <Route path="/panorama" element={<Panorama />} />
             <Route path="/matches" element={<Matches />} />
+            <Route path="/player" element={<Player />} />
             <Route path="/health" element={<Health />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/development" element={<Development />} />

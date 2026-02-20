@@ -184,6 +184,66 @@ class R2UploadService:
             return []
 
 
+    def list_all_archives(self) -> list:
+        """List all archive files in R2 bucket, grouped by match."""
+        if not self.enabled or not self._client:
+            return []
+
+        try:
+            all_objects = []
+            paginator = self._client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=self.bucket):
+                for obj in page.get('Contents', []):
+                    key = obj['Key']
+                    if not key.endswith('.mp4'):
+                        continue
+                    all_objects.append(obj)
+
+            # Group by match (second path component)
+            matches: dict = {}
+            for obj in all_objects:
+                key = obj['Key']
+                parts = key.split('/')
+                if len(parts) < 3:
+                    continue
+                year_month = parts[0]
+                match_id = parts[1]
+                filename = parts[2]
+
+                if match_id not in matches:
+                    matches[match_id] = {
+                        'match_id': match_id,
+                        'year_month': year_month,
+                        'files': [],
+                        'total_size_mb': 0,
+                    }
+
+                url = self.generate_presigned_url(key)
+                size_mb = round(obj['Size'] / (1024 * 1024), 2)
+                matches[match_id]['files'].append({
+                    'name': filename,
+                    'key': key,
+                    'size_mb': size_mb,
+                    'url': url,
+                    'last_modified': obj['LastModified'].isoformat(),
+                })
+                matches[match_id]['total_size_mb'] = round(
+                    matches[match_id]['total_size_mb'] + size_mb, 2
+                )
+
+            # Sort matches by year_month desc, then match_id desc
+            result = sorted(
+                matches.values(),
+                key=lambda m: (m['year_month'], m['match_id']),
+                reverse=True,
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to list all R2 archives: {e}")
+            return []
+
+
 _r2_upload_service: Optional[R2UploadService] = None
 
 

@@ -276,6 +276,20 @@ export interface R2UrlsResponse {
   expires_in_seconds?: number;
 }
 
+export interface R2Match {
+  match_id: string;
+  year_month: string;
+  files: R2ArchiveFile[];
+  total_size_mb: number;
+}
+
+export interface R2AllArchivesResponse {
+  success: boolean;
+  matches: R2Match[];
+  total_matches: number;
+  expires_in_seconds?: number;
+}
+
 // ============================================================================
 // API Service
 // ============================================================================
@@ -411,6 +425,11 @@ export const apiService = {
 
   async getRecordingR2Urls(matchId: string): Promise<R2UrlsResponse> {
     const response = await api.get<R2UrlsResponse>(`/recordings/${matchId}/r2-urls`);
+    return response.data;
+  },
+
+  async listR2Archives(): Promise<R2AllArchivesResponse> {
+    const response = await api.get<R2AllArchivesResponse>('/r2/archives');
     return response.data;
   },
 
